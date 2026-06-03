@@ -13,6 +13,7 @@
   const layerEl = document.getElementById("layer");
   const radiusEl = document.getElementById("radius");
   const radiusLabel = document.getElementById("radius-label");
+  const bordersEl = document.getElementById("borders");
   const goBtn = document.getElementById("go");
   const results = document.getElementById("results");
   const closeBtn = document.getElementById("close");
@@ -27,6 +28,7 @@
   let selected = null;       // { lat, lng } — a fresh, not-yet-explored pick
   let savedMarkers = [];     // explored places loaded from /markers
   let activeRing = null;     // { lat, lng, radius_km } — the location pinging
+  let borderFeatures = [];   // cached country boundary lines (path arrays)
 
   // Roughly km per degree of latitude; used to size the ping to a real radius.
   const KM_PER_DEG = 111;
@@ -38,7 +40,7 @@
     .backgroundImageUrl("https://unpkg.com/three-globe@2.31.0/example/img/night-sky.png")
     .showAtmosphere(true)
     .atmosphereColor("#4ea3ff")
-    .atmosphereAltitude(0.18);
+    .atmosphereAltitude(0.25);
 
   globe.controls().autoRotate = true;
   globe.controls().autoRotateSpeed = 0.35;
@@ -162,7 +164,7 @@
       .pointLng("lng")
       .pointColor((d) => (d.kind === "selected" ? "#ff4d4d" : "#4ea3ff"))
       .pointAltitude(0.02)
-      .pointRadius(0.35);
+      .pointRadius(0.18);
   }
 
   // Draw the ping ring for the active location, sized to its radius in km.
@@ -195,6 +197,63 @@
     } catch (_) { /* offline / first run — ignore */ }
   }
   loadMarkers();
+
+  // --- Country borders toggle ---------------------------------------------
+  // Borders are drawn as PATHS (lines), not filled polygons. Polygons sit on
+  // the globe as solid meshes that intercept the click raycaster, which
+  // swallowed clicks over land (no pin, no ring). Path lines don't capture
+  // pointer events, so onGlobeClick fires normally everywhere. The GeoJSON is
+  // fetched once on first enable and cached as flat lat/lng line arrays.
+  const BORDERS_URL =
+    "https://unpkg.com/world-atlas@2.0.2/countries-110m.json";
+
+  // Flatten a GeoJSON feature's Polygon/MultiPolygon rings into [lat, lng]
+  // line arrays suitable for globe.gl's pathsData.
+  function featureToPaths(feature) {
+    const geom = feature.geometry;
+    if (!geom) return [];
+    const polys =
+      geom.type === "Polygon" ? [geom.coordinates]
+      : geom.type === "MultiPolygon" ? geom.coordinates
+      : [];
+    const paths = [];
+    for (const poly of polys) {
+      for (const ring of poly) {
+        // GeoJSON stores [lng, lat]; paths default to [lat, lng].
+        paths.push(ring.map(([lng, lat]) => [lat, lng]));
+      }
+    }
+    return paths;
+  }
+
+  function renderBorders() {
+    const data = bordersEl.checked ? borderFeatures : [];
+    globe
+      .pathsData(data)
+      .pathColor(() => "rgba(120,180,255,0.55)")
+      .pathStroke(0.6)
+      .pathPointAlt(0.004)
+      .pathTransitionDuration(0);
+  }
+
+  async function loadBorders() {
+    if (borderFeatures.length) { renderBorders(); return; }
+    try {
+      const res = await fetch(BORDERS_URL);
+      if (!res.ok) return;
+      const topology = await res.json();
+      // world-atlas ships TopoJSON; convert via the topojson-client global.
+      const features =
+        topojson.feature(topology, topology.objects.countries).features;
+      borderFeatures = features.flatMap(featureToPaths);
+      renderBorders();
+    } catch (_) { /* offline — leave borders off */ }
+  }
+
+  bordersEl.addEventListener("change", () => {
+    if (bordersEl.checked) loadBorders();
+    else renderBorders();
+  });
 
   // --- Radius slider ------------------------------------------------------
   radiusEl.addEventListener("input", () => {

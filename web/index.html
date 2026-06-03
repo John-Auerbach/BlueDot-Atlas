@@ -50,6 +50,8 @@
   }
   .radius-row { display: flex; align-items: center; gap: 10px; }
   .radius-row output { font-variant-numeric: tabular-nums; font-size: 13px; min-width: 56px; text-align: right; color: var(--text); }
+  .check-row { display: flex; align-items: center; gap: 8px; margin: 12px 0 6px; cursor: pointer; font-size: 12px; color: var(--muted); }
+  .check-row input { width: auto; margin: 0; accent-color: var(--accent); cursor: pointer; }
   button#go {
     margin-top: 16px; width: 100%; padding: 11px; font-size: 14px; font-weight: 600;
     color: #05080f; background: var(--accent); border: none; border-radius: 8px;
@@ -149,6 +151,11 @@
       <input type="range" id="radius" min="5" max="1000" step="5" value="50" />
     </div>
 
+    <label class="check-row" for="borders">
+      <input type="checkbox" id="borders" />
+      <span>Show country borders</span>
+    </label>
+
     <button id="go" disabled>Select a point first</button>
     <p class="hint">Tip: drag to rotate, scroll to zoom, then click a spot.</p>
   </div>
@@ -170,6 +177,7 @@
   <button id="reopen" aria-label="Show results" title="Show results">&#9656;</button>
 
   <script src="https://unpkg.com/globe.gl@2.32.0/dist/globe.gl.min.js"></script>
+  <script src="https://unpkg.com/topojson-client@3"></script>
   <script src="app.js"></script>
 </body>
 </html>
