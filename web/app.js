@@ -36,7 +36,7 @@
 
   // --- Globe setup --------------------------------------------------------
   const globe = Globe()(document.getElementById("globe"))
-    .globeImageUrl("https://unpkg.com/three-globe@2.31.0/example/img/earth-blue-marble.jpg")
+    .globeImageUrl("https://cdn.jsdelivr.net/gh/turban/webgl-earth@master/images/2_no_clouds_4k.jpg")
     .bumpImageUrl("https://unpkg.com/three-globe@2.31.0/example/img/earth-topology.png")
     .backgroundImageUrl("https://unpkg.com/three-globe@2.31.0/example/img/night-sky.png")
     .showAtmosphere(true)
@@ -47,12 +47,11 @@
   globe.controls().autoRotateSpeed = 0.35;
 
   // --- Realism: photorealistic satellite tiles --------------------------
-  // The flat equirectangular Blue Marble texture is the base/off state.
-  // Ticking the box switches on three-globe's slippy-map tile engine, fed by
-  // Esri World Imagery — true satellite photography that streams in higher
-  // resolution as you zoom (Google-Earth style) instead of one fixed image.
+  // The flat equirectangular daymap is the base/off state. We use a texture
+  // with naturally blue oceans (NASA Blue Marble's water reads as a washed
+  // teal-green) so the off state already looks cool and oceanic.
   const IMG = "https://unpkg.com/three-globe@2.31.0/example/img/";
-  const TEX_BASE = IMG + "earth-blue-marble.jpg";
+  const TEX_BASE = "https://cdn.jsdelivr.net/gh/turban/webgl-earth@master/images/2_no_clouds_4k.jpg";
   const TEX_BASE_BUMP = IMG + "earth-topology.png";
 
   // Esri World Imagery slippy tiles use /tile/{z}/{y}/{x} ordering.
