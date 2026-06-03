@@ -49,33 +49,23 @@
   // --- Realism: photorealistic satellite tiles --------------------------
   // The flat equirectangular Blue Marble texture is the base/off state.
   // Ticking the box switches on three-globe's slippy-map tile engine, fed by
-  // Esri World Imagery — true satellite photography that streams in higher
-  // resolution as you zoom (Google-Earth style) instead of one fixed image.
+  // NASA GIBS Blue Marble (Shaded Relief + Bathymetry) — the SAME imagery the
+  // original flat texture came from, so the colours match the first version,
+  // but it streams in higher resolution as you zoom. GIBS Blue Marble only
+  // goes to zoom level 8, so cap the engine there to avoid 404 tiles.
   const IMG = "https://unpkg.com/three-globe@2.31.0/example/img/";
   const TEX_BASE = IMG + "earth-blue-marble.jpg";
   const TEX_BASE_BUMP = IMG + "earth-topology.png";
 
-  // Esri World Imagery slippy tiles use /tile/{z}/{y}/{x} ordering.
+  const SAT_MAX_LEVEL = 8;
   const SAT_TILE = (x, y, z) =>
-    `https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/${z}/${y}/${x}`;
-
-  // The Esri imagery has a slightly washed, green-leaning ocean. With the tile
-  // engine on, the surface is many separate tile meshes (not the single globe
-  // material), so a material tint can't reach it. Instead we apply a subtle
-  // colour-grade as a CSS filter on the WebGL canvas — a small hue shift away
-  // from green plus a touch more saturation makes the water read as a cleaner
-  // blue. The class is removed for the flat Blue Marble base state.
-  function applyOceanTint(on) {
-    globeEl.classList.toggle("sat-tint", on);
-  }
+    `https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/BlueMarble_ShadedRelief_Bathymetry/default/GoogleMapsCompatible_Level8/${z}/${y}/${x}.jpeg`;
 
   function applyHdMap() {
     if (hdMapEl.checked) {
-      globe.globeTileEngineUrl(SAT_TILE);
-      applyOceanTint(true);
+      globe.globeTileEngineMaxLevel(SAT_MAX_LEVEL).globeTileEngineUrl(SAT_TILE);
     } else {
       globe.globeTileEngineUrl(null).globeImageUrl(TEX_BASE).bumpImageUrl(TEX_BASE_BUMP);
-      applyOceanTint(false);
     }
   }
   hdMapEl.addEventListener("change", applyHdMap);
