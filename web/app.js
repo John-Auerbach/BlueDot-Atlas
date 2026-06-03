@@ -15,6 +15,7 @@
   const radiusLabel = document.getElementById("radius-label");
   const bordersEl = document.getElementById("borders");
   const hdMapEl = document.getElementById("hd-map");
+  const atmosphereEl = document.getElementById("atmosphere");
   const goBtn = document.getElementById("go");
   const results = document.getElementById("results");
   const closeBtn = document.getElementById("close");
@@ -70,6 +71,15 @@
   }
   hdMapEl.addEventListener("change", applyHdMap);
   applyHdMap();
+
+  // --- Realism: atmosphere halo ------------------------------------------
+  // The soft blue glow around the globe's limb. Toggling simply shows or
+  // hides three-globe's built-in atmosphere shell.
+  function applyAtmosphere() {
+    globe.showAtmosphere(atmosphereEl.checked);
+  }
+  atmosphereEl.addEventListener("change", applyAtmosphere);
+  applyAtmosphere();
 
   // Keep the globe sized to the window.
   function resize() {
