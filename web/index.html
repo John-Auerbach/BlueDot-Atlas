@@ -23,6 +23,9 @@
     font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
   }
   #globe { position: absolute; inset: 0; }
+  /* Cool colour-grade for the photorealistic satellite layer: nudges the
+     green-washed Esri ocean toward a cleaner blue without crushing land. */
+  #globe.sat-tint canvas { filter: hue-rotate(18deg) saturate(1.18); }
 
   /* Title */
   #brand {
