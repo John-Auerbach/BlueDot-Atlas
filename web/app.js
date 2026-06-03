@@ -73,8 +73,8 @@
     openSavedMarker(pt.data);
   });
 
-  // Clicking outside the Earth (empty space) resumes rotation. The check is
-  // deferred so onGlobeClick (if any) has already run and set the flag.
+  // Clicking outside the Earth (empty space) TOGGLES auto-rotation. The check
+  // is deferred so onGlobeClick (if any) has already run and set the flag.
   // A drag (to rotate/zoom) must NOT be treated as a click, so we measure how
   // far the pointer moved between press and release.
   let downX = 0, downY = 0, dragged = false;
@@ -96,7 +96,7 @@
     setTimeout(() => {
       // Ignore drags entirely — they should never start or stop rotation.
       if (!dragged && !globeClicked) {
-        globe.controls().autoRotate = true;
+        globe.controls().autoRotate = !globe.controls().autoRotate;
       }
       globeClicked = false;
     }, 0);
@@ -106,7 +106,10 @@
   function selectFresh(lat, lng) {
     selected = { lat, lng };
     globe.controls().autoRotate = false;
-    activeRing = { lat, lng, radius_km: Number(radiusEl.value) };
+    activeRing = { lat, lng, radius_km: Number(radiusEl.value), rgb: "255,77,77" };
+    // Force a brand-new selected-point object so it "pops up" at the new spot
+    // instead of sliding from the previous one.
+    selectedPt = null;
     renderMarkers();
     renderRing();
     coordEl.innerHTML =
@@ -120,7 +123,7 @@
   function openSavedMarker(m) {
     selected = null; // this is a past place, not a fresh red pick
     globe.controls().autoRotate = false;
-    activeRing = { lat: m.lat, lng: m.lon, radius_km: m.radius_km };
+    activeRing = { lat: m.lat, lng: m.lon, radius_km: m.radius_km, rgb: "78,163,255" };
     layerEl.value = m.layer;
     radiusEl.value = m.radius_km;
     radiusLabel.textContent = m.radius_km;
@@ -134,12 +137,24 @@
   }
 
   // Draw all saved markers (light blue) plus the current fresh pick (red).
+  // globe.gl re-runs the "rise" enter-animation for any point object whose
+  // identity it hasn't seen before. To keep already-placed markers from
+  // re-animating on every click, we reuse the SAME object per saved marker
+  // (cached on `_pt`) and a single persistent object for the selected pick —
+  // so only a genuinely new marker animates in.
+  let selectedPt = null;
   function renderMarkers() {
-    const pts = savedMarkers.map((m) => ({
-      lat: m.lat, lng: m.lon, kind: "saved", data: m,
-    }));
+    const pts = savedMarkers.map((m) => {
+      if (!m._pt) m._pt = { lat: m.lat, lng: m.lon, kind: "saved", data: m };
+      return m._pt;
+    });
     if (selected) {
-      pts.push({ lat: selected.lat, lng: selected.lng, kind: "selected" });
+      if (!selectedPt) selectedPt = { kind: "selected" };
+      selectedPt.lat = selected.lat;
+      selectedPt.lng = selected.lng;
+      pts.push(selectedPt);
+    } else {
+      selectedPt = null;
     }
     globe
       .pointsData(pts)
@@ -151,20 +166,23 @@
   }
 
   // Draw the ping ring for the active location, sized to its radius in km.
+  // Only the active location pings; its color matches its marker (red for a
+  // fresh pick, light blue for a saved place).
   function renderRing() {
     if (!activeRing) {
       globe.ringsData([]);
       return;
     }
     const maxDeg = Math.max(0.4, activeRing.radius_km / KM_PER_DEG);
+    const rgb = activeRing.rgb || "78,163,255";
     globe
       .ringsData([{ lat: activeRing.lat, lng: activeRing.lng }])
       .ringLat("lat")
       .ringLng("lng")
-      .ringColor(() => (t) => `rgba(78,163,255,${1 - t})`)
+      .ringColor(() => (t) => `rgba(${rgb},${1 - t})`)
       .ringMaxRadius(maxDeg)
-      .ringPropagationSpeed(maxDeg * 0.75)
-      .ringRepeatPeriod(900);
+      .ringPropagationSpeed(maxDeg * 0.5625)
+      .ringRepeatPeriod(1200);
   }
 
   // Load previously explored markers from the server on startup.
@@ -261,9 +279,9 @@
   function renderResults(d) {
     statusEl.style.display = "none";
 
-    rTitle.textContent = d.place_summary
-      ? truncate(d.place_summary, 60)
-      : "Results";
+    rTitle.textContent = d.location_title
+      ? d.location_title
+      : (d.place_summary ? truncate(d.place_summary, 60) : "Results");
     rSub.textContent =
       `${d.layer} · ${d.lat.toFixed(2)}, ${d.lon.toFixed(2)} · ${d.radius_km} km`;
 

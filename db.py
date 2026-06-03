@@ -51,6 +51,58 @@ def init_db() -> None:
             )
             """
         )
+        # Per-UTC-day counter of real (billable) generation calls. Used to
+        # enforce a hard daily cap so the app can never run up a surprise bill.
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS api_usage (
+                day   TEXT PRIMARY KEY,   -- 'YYYY-MM-DD' in UTC
+                count INTEGER NOT NULL DEFAULT 0
+            )
+            """
+        )
+        conn.commit()
+
+
+def _utc_day() -> str:
+    with closing(_connect()) as conn:
+        return conn.execute("SELECT strftime('%Y-%m-%d', 'now')").fetchone()[0]
+
+
+def usage_today() -> int:
+    """Number of billable generation calls made so far today (UTC)."""
+    with closing(_connect()) as conn:
+        row = conn.execute(
+            "SELECT count FROM api_usage WHERE day = ?", (_utc_day(),)
+        ).fetchone()
+    return row["count"] if row else 0
+
+
+def increment_usage() -> int:
+    """Record one billable generation call; return the new count for today."""
+    day = _utc_day()
+    with closing(_connect()) as conn:
+        conn.execute(
+            """
+            INSERT INTO api_usage (day, count) VALUES (?, 1)
+            ON CONFLICT(day) DO UPDATE SET count = count + 1
+            """,
+            (day,),
+        )
+        conn.commit()
+        row = conn.execute(
+            "SELECT count FROM api_usage WHERE day = ?", (day,)
+        ).fetchone()
+    return row["count"]
+
+
+def decrement_usage() -> None:
+    """Refund one reserved slot (e.g. when no billable call actually ran)."""
+    with closing(_connect()) as conn:
+        conn.execute(
+            "UPDATE api_usage SET count = MAX(0, count - 1) WHERE day = ?",
+            (_utc_day(),),
+        )
         conn.commit()
 
 

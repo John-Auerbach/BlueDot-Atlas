@@ -29,6 +29,32 @@ Configure your API key in a `.env` file at the project root:
 echo 'GEMINI_API_KEY=your_key_here' > .env
 ```
 
+## Cost protection (hard daily cap)
+
+Every new exploration makes one billable Gemini API call; re-opening a
+previously explored place is served from the local SQLite cache and is free.
+
+To prevent surprise charges, the app enforces a **hard daily cap** on billable
+calls, counted per UTC day and stored in the database (so it survives
+restarts). Once the cap is hit, new explorations return HTTP 429 while cached
+places keep working. The limit resets at 00:00 UTC.
+
+Set the cap with `DAILY_API_LIMIT` (default `50`):
+
+```bash
+DAILY_API_LIMIT=200 .venv/bin/python -m uvicorn app:app --port 8000
+```
+
+Check today's usage at any time:
+
+```bash
+curl http://localhost:8000/usage   # {"used":N,"limit":50,"remaining":...}
+```
+
+> This code-enforced cutoff is independent of Google Cloud budgets, which only
+> send alerts and never actually stop spending. For deployment, set
+> `DAILY_API_LIMIT` to a value whose worst-case cost you are comfortable with.
+
 ## Run
 
 Start the API + web server:

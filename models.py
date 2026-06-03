@@ -134,6 +134,7 @@ class QueryResponse(BaseModel):
     lon: float
     radius_km: float
     layer: str
+    location_title: str = ""
     place_summary: str = ""
     cultural_context: str = ""
     issues: list[Issue] = Field(default_factory=list)
@@ -181,6 +182,7 @@ class QueryResponse(BaseModel):
             lon=lon,
             radius_km=radius_km,
             layer=layer,
+            location_title=str(parsed.get("location_title", "") or ""),
             place_summary=str(parsed.get("place_summary", "") or ""),
             cultural_context=str(parsed.get("cultural_context", "") or ""),
             issues=issues,

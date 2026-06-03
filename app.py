@@ -27,6 +27,10 @@ import generate
 import db
 from models import QueryResponse
 
+# Load .env early so environment-based settings (e.g. DAILY_API_LIMIT) are
+# available when this module is imported, not just inside generate().
+generate.load_env_file()
+
 _WEB_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "web")
 
 app = FastAPI(
@@ -47,6 +51,12 @@ app.add_middleware(
 # server stays responsive.
 _executor = ThreadPoolExecutor(max_workers=4)
 
+# Hard daily cap on billable generation calls (cache hits are free and do not
+# count). Set DAILY_API_LIMIT in the environment to override. This is a code-
+# enforced cutoff so the app can never run up a surprise bill in production,
+# independent of any Google Cloud budget (which only alerts, never stops).
+DAILY_API_LIMIT = int(os.environ.get("DAILY_API_LIMIT", "50"))
+
 # Ensure the persistence layer exists before serving requests.
 db.init_db()
 
@@ -54,6 +64,17 @@ db.init_db()
 @app.get("/health")
 def health() -> dict:
     return {"status": "ok"}
+
+
+@app.get("/usage")
+def usage() -> dict:
+    """Today's billable API usage against the hard daily cap."""
+    used = db.usage_today()
+    return {
+        "used": used,
+        "limit": DAILY_API_LIMIT,
+        "remaining": max(0, DAILY_API_LIMIT - used),
+    }
 
 
 @app.get("/markers")
@@ -66,7 +87,7 @@ def markers() -> list[dict]:
 async def query(
     lat: float = Query(..., ge=-90, le=90, description="latitude"),
     lon: float = Query(..., ge=-180, le=180, description="longitude"),
-    radius: float = Query(50.0, gt=0, le=500, description="radius in km"),
+    radius: float = Query(50.0, gt=0, le=1000, description="radius in km"),
     layer: str = Query("conservation", min_length=1, max_length=64),
 ) -> QueryResponse:
     """Generate grounded, validated info for a location + layer."""
@@ -78,6 +99,26 @@ async def query(
     if cached is not None:
         return QueryResponse.model_validate_json(cached)
 
+    # Hard cutoff: refuse new (billable) generations once the daily cap is hit.
+    # Checked only on a cache miss, so revisiting saved places always works.
+    if db.usage_today() >= DAILY_API_LIMIT:
+        raise HTTPException(
+            status_code=429,
+            detail=(
+                f"Daily exploration limit reached ({DAILY_API_LIMIT}). "
+                "This cap protects against unexpected API charges. "
+                "Previously explored places are still available, and the "
+                "limit resets at 00:00 UTC."
+            ),
+        )
+
+    # Reserve a slot up-front so concurrent requests can't overshoot the cap.
+    if db.increment_usage() > DAILY_API_LIMIT:
+        raise HTTPException(
+            status_code=429,
+            detail=f"Daily exploration limit reached ({DAILY_API_LIMIT}).",
+        )
+
     loop = asyncio.get_running_loop()
     try:
         result = await loop.run_in_executor(
@@ -85,7 +126,9 @@ async def query(
             lambda: generate.generate(lat, lon, radius, layer),
         )
     except generate.MissingAPIKeyError as exc:
-        # Misconfiguration, not the client's fault — 503.
+        # Misconfiguration, not the client's fault — 503. No API call was made,
+        # so refund the reserved slot.
+        db.decrement_usage()
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     except Exception as exc:  # noqa: BLE001
         # Upstream model errors (e.g. Gemini 503 high demand) surface here.

@@ -50,6 +50,7 @@ class MissingAPIKeyError(RuntimeError):
 # small and explicit makes extraction errors easier to spot.
 
 SCHEMA_HINT = {
+    "location_title": "a real, specific place name for this location (e.g. the city/town/region and country), 2-6 words",
     "place_summary": "1-3 sentence human introduction to the area",
     "issues": [
         {
