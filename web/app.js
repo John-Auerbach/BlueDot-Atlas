@@ -52,18 +52,26 @@ import * as THREE from "three";
 
   // --- Realism: photorealistic satellite tiles --------------------------
   // The flat equirectangular Blue Marble texture is the base/off state.
-  // Ticking the box switches on three-globe's slippy-map tile engine, fed by
-  // NASA GIBS Blue Marble (Shaded Relief + Bathymetry) — the SAME imagery the
-  // original flat texture came from, so the colours match the first version,
-  // but it streams in higher resolution as you zoom. GIBS Blue Marble only
-  // goes to zoom level 8, so cap the engine there to avoid 404 tiles.
+  // Ticking the box switches on three-globe's slippy-map tile engine. We use a
+  // hybrid source so colours match the original far out AND you can zoom deep:
+  //   • levels 0–8: NASA GIBS Blue Marble (Shaded Relief + Bathymetry) — the
+  //     SAME imagery as the original flat texture, so the colours match.
+  //   • levels 9+: Esri World Imagery — real photographic mosaic that stays
+  //     sharp down to street level (~level 19).
+  // GIBS Blue Marble stops at level 8, so anything deeper would 404; past that
+  // we hand off to Esri, which carries the deep-zoom detail.
   const IMG = "https://unpkg.com/three-globe@2.31.0/example/img/";
   const TEX_BASE = IMG + "earth-blue-marble.jpg";
   const TEX_BASE_BUMP = IMG + "earth-topology.png";
 
-  const SAT_MAX_LEVEL = 8;
+  // How deep the engine is allowed to request tiles (Esri serves to ~19).
+  const SAT_MAX_LEVEL = 17;
+  // Below this level use Blue Marble; at/above it use Esri.
+  const ESRI_HANDOFF_LEVEL = 9;
   const SAT_TILE = (x, y, z) =>
-    `https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/BlueMarble_ShadedRelief_Bathymetry/default/GoogleMapsCompatible_Level8/${z}/${y}/${x}.jpeg`;
+    z < ESRI_HANDOFF_LEVEL
+      ? `https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/BlueMarble_ShadedRelief_Bathymetry/default/GoogleMapsCompatible_Level8/${z}/${y}/${x}.jpeg`
+      : `https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/${z}/${y}/${x}`;
 
   function applyHdMap() {
     if (hdMapEl.checked) {
