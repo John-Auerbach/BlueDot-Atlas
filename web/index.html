@@ -23,9 +23,29 @@
     font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
   }
   #globe { position: absolute; inset: 0; }
-  /* Cool colour-grade for the photorealistic satellite layer: nudges the
-     green-washed Esri ocean toward a cleaner blue without crushing land. */
-  #globe.sat-tint canvas { filter: hue-rotate(18deg) saturate(1.18); }
+  /* Colour-grade for the photorealistic satellite layer. Each knob below is a
+     single editable number — tweak them to taste:
+       --sat-sepia      higher = yellows turn more beige/warm (0–1)
+       --sat-brightness lower  = greens (and all land) get darker
+       --sat-contrast   higher = deeper shadows, punchier greens
+       --sat-saturate   overall colour intensity
+       --sat-hue        rotates the whole palette (deg); nudges ocean off-green
+     Order matters: sepia first warms yellows, then hue/saturate/brightness. */
+  :root {
+    --sat-sepia: 0.3;
+    --sat-brightness: 0.9;
+    --sat-contrast: 1.08;
+    --sat-saturate: 1.8;
+    --sat-hue: 12deg;
+  }
+  #globe.sat-tint canvas {
+    filter:
+      sepia(var(--sat-sepia))
+      hue-rotate(var(--sat-hue))
+      saturate(var(--sat-saturate))
+      brightness(var(--sat-brightness))
+      contrast(var(--sat-contrast));
+  }
 
   /* Title */
   #brand {
