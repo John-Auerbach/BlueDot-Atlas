@@ -46,23 +46,24 @@
   globe.controls().autoRotate = true;
   globe.controls().autoRotateSpeed = 0.35;
 
-  // --- Realism: detailed surface map -------------------------------------
-  // The ORIGINAL look is NASA Blue Marble (2K) + topology bump. Ticking the
-  // box upgrades to a sharper 4K daymap + 4K elevation bump (CORS-safe via
-  // jsDelivr), so the toggle only ever adds detail beyond the original.
+  // --- Realism: photorealistic satellite tiles --------------------------
+  // The flat equirectangular Blue Marble texture is the base/off state.
+  // Ticking the box switches on three-globe's slippy-map tile engine, fed by
+  // Esri World Imagery — true satellite photography that streams in higher
+  // resolution as you zoom (Google-Earth style) instead of one fixed image.
   const IMG = "https://unpkg.com/three-globe@2.31.0/example/img/";
-  const TEX_ORIGINAL = IMG + "earth-blue-marble.jpg";
-  const TEX_ORIGINAL_BUMP = IMG + "earth-topology.png";
+  const TEX_BASE = IMG + "earth-blue-marble.jpg";
+  const TEX_BASE_BUMP = IMG + "earth-topology.png";
 
-  const HD = "https://cdn.jsdelivr.net/gh/turban/webgl-earth@master/images/";
-  const TEX_HD = HD + "2_no_clouds_4k.jpg";
-  const TEX_HD_BUMP = HD + "elev_bump_4k.jpg";
+  // Esri World Imagery slippy tiles use /tile/{z}/{y}/{x} ordering.
+  const SAT_TILE = (x, y, z) =>
+    `https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/${z}/${y}/${x}`;
 
   function applyHdMap() {
     if (hdMapEl.checked) {
-      globe.globeImageUrl(TEX_HD).bumpImageUrl(TEX_HD_BUMP);
+      globe.globeTileEngineUrl(SAT_TILE);
     } else {
-      globe.globeImageUrl(TEX_ORIGINAL).bumpImageUrl(TEX_ORIGINAL_BUMP);
+      globe.globeTileEngineUrl(null).globeImageUrl(TEX_BASE).bumpImageUrl(TEX_BASE_BUMP);
     }
   }
   hdMapEl.addEventListener("change", applyHdMap);
