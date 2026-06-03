@@ -5,6 +5,9 @@
  * the validated results in a side panel.
  */
 
+import Globe from "globe.gl";
+import * as THREE from "three";
+
 (function () {
   "use strict";
 
@@ -40,11 +43,9 @@
     .globeImageUrl("https://unpkg.com/three-globe@2.31.0/example/img/earth-blue-marble.jpg")
     .bumpImageUrl("https://unpkg.com/three-globe@2.31.0/example/img/earth-topology.png")
     .backgroundImageUrl("https://unpkg.com/three-globe@2.31.0/example/img/night-sky.png")
-    // Built-in atmosphere: a soft white Fresnel glow around the limb. Colour
-    // and thickness are set here; visibility is toggled in applyAtmosphere().
-    .showAtmosphere(true)
-    .atmosphereColor("#ffffff")
-    .atmosphereAltitude(0.12);
+    // We render our own faint white Fresnel shell instead of the built-in
+    // atmosphere (see the atmosphere halo section), so keep this off.
+    .showAtmosphere(false);
 
   globe.controls().autoRotate = true;
   globe.controls().autoRotateSpeed = 0.35;
@@ -74,13 +75,91 @@
   hdMapEl.addEventListener("change", applyHdMap);
   applyHdMap();
 
-  // --- Realism: atmosphere halo ------------------------------------------
-  // A faint, thin white glow hugging the globe's limb. We use three-globe's
-  // built-in atmosphere (configured in the globe setup above) and just toggle
-  // its visibility — no second three.js instance, which keeps the HD tile
-  // engine working.
+  // --- Realism: atmosphere halo (custom Fresnel shell) -------------------
+  // A faint, thin, soft white diffuse glow that covers the whole visible
+  // hemisphere and swells gently toward the limb. Built from two additive
+  // spheres just larger than the globe (radius 100 in three-globe units),
+  // shaded by a view-based Fresnel term. Because globe.gl and this file share
+  // ONE three.js instance (import map), these meshes drop straight into
+  // globe.scene() and the HD tile engine keeps working.
+  const GLOBE_R = 100;
+
+  const ATMO_VERT = `
+    varying vec3 vNormal;
+    varying vec3 vViewPosition;
+    void main() {
+      vNormal = normalize(normalMatrix * normal);
+      vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
+      vViewPosition = -mvPosition.xyz;
+      gl_Position = projectionMatrix * mvPosition;
+    }
+  `;
+  const ATMO_FRAG = `
+    uniform vec3 glowColor;
+    uniform float base;
+    uniform float power;
+    uniform float fade;
+    uniform float intensity;
+    varying vec3 vNormal;
+    varying vec3 vViewPosition;
+    void main() {
+      vec3 viewDir = normalize(vViewPosition);
+      // facing ~1 looking straight at the surface, ~0 at the grazing limb.
+      float facing = clamp(dot(vNormal, viewDir), 0.0, 1.0);
+      float d = 1.0 - facing; // 0 at the disc centre, 1 at the silhouette.
+      // rise: even haze (base) plus a swell toward the limb.
+      // pow(facing, fade) pulls the glow back to zero right at the silhouette
+      // so the outer halo has no hard ring — it dissolves into space.
+      float rise = base + (1.0 - base) * pow(d, power);
+      float glow = rise * pow(facing, fade) * intensity;
+      gl_FragColor = vec4(glowColor * glow, glow);
+    }
+  `;
+
+  function makeShell(radiusScale, side, { base, power, fade, intensity }) {
+    const geom = new THREE.SphereGeometry(GLOBE_R * radiusScale, 64, 48);
+    const mat = new THREE.ShaderMaterial({
+      uniforms: {
+        glowColor: { value: new THREE.Color("#ffffff") },
+        base: { value: base },
+        power: { value: power },
+        fade: { value: fade },
+        intensity: { value: intensity },
+      },
+      vertexShader: ATMO_VERT,
+      fragmentShader: ATMO_FRAG,
+      side,
+      blending: THREE.AdditiveBlending,
+      transparent: true,
+      depthWrite: false,
+    });
+    return new THREE.Mesh(geom, mat);
+  }
+
+  // Front shell: a very faint, even white haze laid over the whole visible
+  // hemisphere that lifts softly toward the limb — the diffuse glow on the
+  // planet itself. fade 0 keeps the haze all the way to the edge.
+  const atmoInner = makeShell(1.004, THREE.FrontSide, {
+    base: 0.12, power: 2.0, fade: 0.0, intensity: 0.5,
+  });
+  // Outer shell: a thin, soft white band just past the silhouette. The fade
+  // term forces it to zero at the outer edge, so it melts into space with no
+  // sharp boundary.
+  const atmoOuter = makeShell(1.05, THREE.BackSide, {
+    base: 0.0, power: 2.0, fade: 2.5, intensity: 1.4,
+  });
+
+  const atmoGroup = new THREE.Group();
+  atmoGroup.add(atmoInner);
+  atmoGroup.add(atmoOuter);
+
   function applyAtmosphere() {
-    globe.showAtmosphere(atmosphereEl.checked);
+    const scene = globe.scene();
+    if (atmosphereEl.checked) {
+      if (!atmoGroup.parent) scene.add(atmoGroup);
+    } else if (atmoGroup.parent) {
+      scene.remove(atmoGroup);
+    }
   }
   atmosphereEl.addEventListener("change", applyAtmosphere);
   applyAtmosphere();

@@ -194,8 +194,22 @@
 
   <button id="reopen" aria-label="Show results" title="Show results">&#9656;</button>
 
-  <script src="https://unpkg.com/globe.gl@2.42.0/dist/globe.gl.min.js"></script>
+  <!-- topojson-client stays a classic global (window.topojson); classic
+       scripts run before module scripts, so it's ready when app.js runs. -->
   <script src="https://unpkg.com/topojson-client@3"></script>
-  <script src="app.js"></script>
+
+  <!-- One shared three.js instance. globe.gl (via esm.sh, with three kept
+       external) and our own atmosphere code both import THIS three, so there's
+       a single instance — the tile engine works AND we can add custom meshes. -->
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "https://esm.sh/three@0.180.0",
+        "three/": "https://esm.sh/three@0.180.0/",
+        "globe.gl": "https://esm.sh/globe.gl@2.42.0?external=three"
+      }
+    }
+  </script>
+  <script type="module" src="app.js"></script>
 </body>
 </html>
