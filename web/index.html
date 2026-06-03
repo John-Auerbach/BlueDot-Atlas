@@ -34,12 +34,16 @@
   #brand p { margin: 2px 0 0; font-size: 12px; color: var(--muted); }
 
   /* Control card */
-  #controls {
+  #sidebar {
     position: absolute; top: 18px; right: 18px; z-index: 6;
-    width: 280px; background: var(--panel); border: 1px solid var(--border);
+    width: 280px; display: flex; flex-direction: column; gap: 14px;
+    max-height: calc(100vh - 36px); overflow-y: auto;
+  }
+  #controls, #realism {
+    width: 100%; background: var(--panel); border: 1px solid var(--border);
     border-radius: 12px; padding: 16px; backdrop-filter: blur(8px);
   }
-  #controls h2 { margin: 0 0 10px; font-size: 13px; color: var(--muted); font-weight: 600; text-transform: uppercase; letter-spacing: 1px; }
+  #controls h2, #realism h2 { margin: 0 0 10px; font-size: 13px; color: var(--muted); font-weight: 600; text-transform: uppercase; letter-spacing: 1px; }
   .coord { font-size: 13px; color: var(--muted); margin-bottom: 12px; min-height: 18px; }
   .coord b { color: var(--text); }
   label { display: block; font-size: 12px; color: var(--muted); margin: 12px 0 6px; }
@@ -135,6 +139,7 @@
     <p>Click anywhere on Earth to explore.</p>
   </div>
 
+  <div id="sidebar">
   <div id="controls">
     <h2>Explore a place</h2>
     <div class="coord" id="coord">No location selected.</div>
@@ -158,6 +163,15 @@
 
     <button id="go" disabled>Select a point first</button>
     <p class="hint">Tip: drag to rotate, scroll to zoom, then click a spot.</p>
+  </div>
+
+  <div id="realism">
+    <h2>Realism</h2>
+    <label class="check-row" for="hd-map">
+      <input type="checkbox" id="hd-map" checked />
+      <span>Detailed surface map</span>
+    </label>
+  </div>
   </div>
 
   <aside id="results">

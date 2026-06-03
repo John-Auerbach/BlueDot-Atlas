@@ -14,6 +14,7 @@
   const radiusEl = document.getElementById("radius");
   const radiusLabel = document.getElementById("radius-label");
   const bordersEl = document.getElementById("borders");
+  const hdMapEl = document.getElementById("hd-map");
   const goBtn = document.getElementById("go");
   const results = document.getElementById("results");
   const closeBtn = document.getElementById("close");
@@ -44,6 +45,25 @@
 
   globe.controls().autoRotate = true;
   globe.controls().autoRotateSpeed = 0.35;
+
+  // --- Realism: detailed surface map -------------------------------------
+  // Reliable, CORS-safe textures from the three-globe example assets on
+  // unpkg. "Detailed" = NASA Blue Marble plus a topology bump map for relief;
+  // the plain option is the flat day map with no bump.
+  const IMG = "https://unpkg.com/three-globe@2.31.0/example/img/";
+  const TEX_DETAILED = IMG + "earth-blue-marble.jpg";
+  const TEX_PLAIN = IMG + "earth-day.jpg";
+  const TEX_TOPO = IMG + "earth-topology.png";
+
+  function applyHdMap() {
+    if (hdMapEl.checked) {
+      globe.globeImageUrl(TEX_DETAILED).bumpImageUrl(TEX_TOPO);
+    } else {
+      globe.globeImageUrl(TEX_PLAIN).bumpImageUrl(null);
+    }
+  }
+  hdMapEl.addEventListener("change", applyHdMap);
+  applyHdMap();
 
   // Keep the globe sized to the window.
   function resize() {
