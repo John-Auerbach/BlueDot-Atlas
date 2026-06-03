@@ -19,6 +19,7 @@ import * as THREE from "three";
   const bordersEl = document.getElementById("borders");
   const hdMapEl = document.getElementById("hd-map");
   const atmosphereEl = document.getElementById("atmosphere");
+  const dayNightEl = document.getElementById("daynight");
   const goBtn = document.getElementById("go");
   const results = document.getElementById("results");
   const closeBtn = document.getElementById("close");
@@ -172,7 +173,130 @@ import * as THREE from "three";
   atmosphereEl.addEventListener("change", applyAtmosphere);
   applyAtmosphere();
 
-  // Keep the globe sized to the window.
+  // --- Realism: day / night + city lights --------------------------------
+  // Two shells sitting just above the surface, both driven by a "sun
+  // direction" uniform so they only affect the hemisphere facing away from the
+  // sun:
+  //   • a soft dark veil that dims the night side (the terminator), and
+  //   • the NASA night-lights texture added on top so cities glow in the dark.
+  // The sun direction is the real sub-solar point for the current UTC time, so
+  // the terminator falls where it actually is right now. We sample the lights
+  // texture analytically from the surface normal (matching three-globe's
+  // lat/lng convention) so the lights line up with the continents regardless
+  // of the shell geometry's own UVs.
+  const DEG = Math.PI / 180;
+
+  // Sub-solar point → a unit vector in three-globe's world space.
+  function sunDirection() {
+    const now = new Date();
+    const yearStart = Date.UTC(now.getUTCFullYear(), 0, 0);
+    const today = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
+    const dayOfYear = (today - yearStart) / 86400000;
+    // Solar declination (approx) and the longitude the sun is overhead.
+    const decl = -23.44 * Math.cos((2 * Math.PI / 365) * (dayOfYear + 10));
+    const utcHours = now.getUTCHours() + now.getUTCMinutes() / 60 + now.getUTCSeconds() / 3600;
+    const lng = -15 * (utcHours - 12); // sun over 0° lng at 12:00 UTC
+    const lat = decl;
+    // three-globe polar→cartesian convention.
+    const phi = (90 - lat) * DEG;
+    const theta = (90 - lng) * DEG;
+    return new THREE.Vector3(
+      Math.sin(phi) * Math.cos(theta),
+      Math.cos(phi),
+      Math.sin(phi) * Math.sin(theta)
+    ).normalize();
+  }
+
+  const sunUniform = { value: sunDirection() };
+
+  const DN_VERT = `
+    varying vec3 vWorldNormal;
+    void main() {
+      vWorldNormal = normalize(mat3(modelMatrix) * normal);
+      gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+    }
+  `;
+
+  // Dark veil: black, normal-blended, alpha rises on the night side.
+  const SHADE_FRAG = `
+    uniform vec3 sunDir;
+    varying vec3 vWorldNormal;
+    void main() {
+      float d = dot(normalize(vWorldNormal), normalize(sunDir));
+      // 0 on the day side, 1 deep on the night side, soft across the terminator.
+      float night = smoothstep(0.12, -0.18, d);
+      gl_FragColor = vec4(0.0, 0.0, 0.0, night * 0.8);
+    }
+  `;
+
+  // City lights: sample the night texture by analytic lat/lng, add on the
+  // night side only. Additive blend makes the lit pixels glow.
+  const LIGHTS_FRAG = `
+    uniform vec3 sunDir;
+    uniform sampler2D nightTex;
+    varying vec3 vWorldNormal;
+    const float PI = 3.141592653589793;
+    void main() {
+      vec3 n = normalize(vWorldNormal);
+      float lat = asin(clamp(n.y, -1.0, 1.0));         // -PI/2 .. PI/2
+      float theta = atan(n.z, n.x);                    // = (90 - lng) in rad
+      float lng = (PI * 0.5) - theta;                  // radians
+      float u = fract((lng / (2.0 * PI)) + 0.5);
+      float v = (lat / PI) + 0.5;
+      vec3 lights = texture2D(nightTex, vec2(u, v)).rgb;
+      // The black-marble texture has faint dark-blue oceans; subtract a floor
+      // to drop them to zero so only genuine city lights remain, then boost.
+      lights = max(lights - 0.12, 0.0) * 2.8;
+      float d = dot(n, normalize(sunDir));
+      float night = smoothstep(0.12, -0.18, d);
+      gl_FragColor = vec4(lights * night, 1.0);
+    }
+  `;
+
+  const nightTex = new THREE.TextureLoader().load(IMG + "earth-night.jpg");
+  nightTex.colorSpace = THREE.SRGBColorSpace;
+
+  const dnShade = new THREE.Mesh(
+    new THREE.SphereGeometry(GLOBE_R * 1.001, 64, 48),
+    new THREE.ShaderMaterial({
+      uniforms: { sunDir: sunUniform },
+      vertexShader: DN_VERT,
+      fragmentShader: SHADE_FRAG,
+      side: THREE.FrontSide,
+      transparent: true,
+      depthWrite: false,
+    })
+  );
+  const dnLights = new THREE.Mesh(
+    new THREE.SphereGeometry(GLOBE_R * 1.0015, 64, 48),
+    new THREE.ShaderMaterial({
+      uniforms: { sunDir: sunUniform, nightTex: { value: nightTex } },
+      vertexShader: DN_VERT,
+      fragmentShader: LIGHTS_FRAG,
+      side: THREE.FrontSide,
+      blending: THREE.AdditiveBlending,
+      transparent: true,
+      depthWrite: false,
+    })
+  );
+
+  const dayNightGroup = new THREE.Group();
+  dayNightGroup.add(dnShade);
+  dayNightGroup.add(dnLights);
+
+  function applyDayNight() {
+    const scene = globe.scene();
+    if (dayNightEl.checked) {
+      sunUniform.value = sunDirection(); // refresh the terminator on enable
+      if (!dayNightGroup.parent) scene.add(dayNightGroup);
+    } else if (dayNightGroup.parent) {
+      scene.remove(dayNightGroup);
+    }
+  }
+  dayNightEl.addEventListener("change", applyDayNight);
+  applyDayNight();
+
+
   function resize() {
     globe.width(window.innerWidth).height(window.innerHeight);
   }
