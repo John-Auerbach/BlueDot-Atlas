@@ -47,19 +47,22 @@
   globe.controls().autoRotateSpeed = 0.35;
 
   // --- Realism: detailed surface map -------------------------------------
-  // Reliable, CORS-safe textures from the three-globe example assets on
-  // unpkg. "Detailed" = NASA Blue Marble plus a topology bump map for relief;
-  // the plain option is the flat day map with no bump.
+  // The ORIGINAL look is NASA Blue Marble (2K) + topology bump. Ticking the
+  // box upgrades to a sharper 4K daymap + 4K elevation bump (CORS-safe via
+  // jsDelivr), so the toggle only ever adds detail beyond the original.
   const IMG = "https://unpkg.com/three-globe@2.31.0/example/img/";
-  const TEX_DETAILED = IMG + "earth-blue-marble.jpg";
-  const TEX_PLAIN = IMG + "earth-day.jpg";
-  const TEX_TOPO = IMG + "earth-topology.png";
+  const TEX_ORIGINAL = IMG + "earth-blue-marble.jpg";
+  const TEX_ORIGINAL_BUMP = IMG + "earth-topology.png";
+
+  const HD = "https://cdn.jsdelivr.net/gh/turban/webgl-earth@master/images/";
+  const TEX_HD = HD + "2_no_clouds_4k.jpg";
+  const TEX_HD_BUMP = HD + "elev_bump_4k.jpg";
 
   function applyHdMap() {
     if (hdMapEl.checked) {
-      globe.globeImageUrl(TEX_DETAILED).bumpImageUrl(TEX_TOPO);
+      globe.globeImageUrl(TEX_HD).bumpImageUrl(TEX_HD_BUMP);
     } else {
-      globe.globeImageUrl(TEX_PLAIN).bumpImageUrl(null);
+      globe.globeImageUrl(TEX_ORIGINAL).bumpImageUrl(TEX_ORIGINAL_BUMP);
     }
   }
   hdMapEl.addEventListener("change", applyHdMap);
