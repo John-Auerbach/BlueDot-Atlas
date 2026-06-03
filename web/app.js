@@ -40,9 +40,11 @@
     .globeImageUrl("https://unpkg.com/three-globe@2.31.0/example/img/earth-blue-marble.jpg")
     .bumpImageUrl("https://unpkg.com/three-globe@2.31.0/example/img/earth-topology.png")
     .backgroundImageUrl("https://unpkg.com/three-globe@2.31.0/example/img/night-sky.png")
+    // Built-in atmosphere: a soft white Fresnel glow around the limb. Colour
+    // and thickness are set here; visibility is toggled in applyAtmosphere().
     .showAtmosphere(true)
-    .atmosphereColor("#4ea3ff")
-    .atmosphereAltitude(0.25);
+    .atmosphereColor("#ffffff")
+    .atmosphereAltitude(0.12);
 
   globe.controls().autoRotate = true;
   globe.controls().autoRotateSpeed = 0.35;
@@ -73,8 +75,10 @@
   applyHdMap();
 
   // --- Realism: atmosphere halo ------------------------------------------
-  // The soft blue glow around the globe's limb. Toggling simply shows or
-  // hides three-globe's built-in atmosphere shell.
+  // A faint, thin white glow hugging the globe's limb. We use three-globe's
+  // built-in atmosphere (configured in the globe setup above) and just toggle
+  // its visibility — no second three.js instance, which keeps the HD tile
+  // engine working.
   function applyAtmosphere() {
     globe.showAtmosphere(atmosphereEl.checked);
   }
