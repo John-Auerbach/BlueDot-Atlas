@@ -24,6 +24,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 import generate
+import db
 from models import QueryResponse
 
 _WEB_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "web")
@@ -46,10 +47,19 @@ app.add_middleware(
 # server stays responsive.
 _executor = ThreadPoolExecutor(max_workers=4)
 
+# Ensure the persistence layer exists before serving requests.
+db.init_db()
+
 
 @app.get("/health")
 def health() -> dict:
     return {"status": "ok"}
+
+
+@app.get("/markers")
+def markers() -> list[dict]:
+    """All saved explorations as lightweight markers for the globe."""
+    return db.list_markers()
 
 
 @app.get("/query", response_model=QueryResponse)
@@ -61,6 +71,12 @@ async def query(
 ) -> QueryResponse:
     """Generate grounded, validated info for a location + layer."""
     import asyncio
+
+    # Return the originally recorded result if this exact place + radius +
+    # layer was explored before (survives server restarts).
+    cached = db.get_exploration(lat, lon, radius, layer)
+    if cached is not None:
+        return QueryResponse.model_validate_json(cached)
 
     loop = asyncio.get_running_loop()
     try:
@@ -84,7 +100,7 @@ async def query(
             detail="Generation returned unparseable output.",
         )
 
-    return QueryResponse.from_generation(
+    response = QueryResponse.from_generation(
         lat=lat,
         lon=lon,
         radius_km=radius,
@@ -92,6 +108,10 @@ async def query(
         parsed=result.parsed,
         grounding_urls=result.grounding_urls,
     )
+
+    # Persist so this marker is restored on reload and re-clicks are instant.
+    db.save_exploration(lat, lon, radius, layer, response.model_dump_json())
+    return response
 
 
 # Serve the Globe.gl frontend. Mounted last so /health and /query take

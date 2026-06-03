@@ -16,13 +16,20 @@
   const goBtn = document.getElementById("go");
   const results = document.getElementById("results");
   const closeBtn = document.getElementById("close");
+  const reopenBtn = document.getElementById("reopen");
   const statusEl = document.getElementById("status");
   const contentEl = document.getElementById("content");
   const rTitle = document.getElementById("r-title");
   const rSub = document.getElementById("r-sub");
+  const globeEl = document.getElementById("globe");
 
   // --- State --------------------------------------------------------------
-  let selected = null; // { lat, lng }
+  let selected = null;       // { lat, lng } — a fresh, not-yet-explored pick
+  let savedMarkers = [];     // explored places loaded from /markers
+  let activeRing = null;     // { lat, lng, radius_km } — the location pinging
+
+  // Roughly km per degree of latitude; used to size the ping to a real radius.
+  const KM_PER_DEG = 111;
 
   // --- Globe setup --------------------------------------------------------
   const globe = Globe()(document.getElementById("globe"))
@@ -44,62 +51,170 @@
   resize();
 
   // --- Click to select a point -------------------------------------------
+  // Tracks whether the most recent click actually hit the globe surface, so
+  // clicks on empty space (off the Earth) can resume auto-rotation.
+  let globeClicked = false;
+  let lastPointClick = 0; // timestamp guard so a marker click isn't also a new pick
+
   globe.onGlobeClick(({ lat, lng }) => {
+    globeClicked = true;
+    // If a saved marker was just clicked, ignore this globe-surface click so
+    // we don't drop a new selection on top of it.
+    if (Date.now() - lastPointClick < 80) return;
+    selectFresh(lat, lng);
+  });
+
+  // Clicking an existing (saved) marker pulls up its recorded info.
+  globe.onPointClick((pt) => {
+    // Any marker click is still a click *on* the Earth — keep rotation stopped.
+    globeClicked = true;
+    lastPointClick = Date.now();
+    if (!pt || pt.kind !== "saved") return;
+    openSavedMarker(pt.data);
+  });
+
+  // Clicking outside the Earth (empty space) resumes rotation. The check is
+  // deferred so onGlobeClick (if any) has already run and set the flag.
+  // A drag (to rotate/zoom) must NOT be treated as a click, so we measure how
+  // far the pointer moved between press and release.
+  let downX = 0, downY = 0, dragged = false;
+  const DRAG_PX = 6; // movement beyond this counts as a drag, not a click
+
+  globeEl.addEventListener("pointerdown", (e) => {
+    downX = e.clientX;
+    downY = e.clientY;
+    dragged = false;
+  });
+  globeEl.addEventListener("pointermove", (e) => {
+    if (Math.abs(e.clientX - downX) > DRAG_PX ||
+        Math.abs(e.clientY - downY) > DRAG_PX) {
+      dragged = true;
+    }
+  });
+
+  globeEl.addEventListener("click", () => {
+    setTimeout(() => {
+      // Ignore drags entirely — they should never start or stop rotation.
+      if (!dragged && !globeClicked) {
+        globe.controls().autoRotate = true;
+      }
+      globeClicked = false;
+    }, 0);
+  });
+
+  // A brand-new pick: red marker, ping sized to the current radius slider.
+  function selectFresh(lat, lng) {
     selected = { lat, lng };
     globe.controls().autoRotate = false;
-    renderMarker();
+    activeRing = { lat, lng, radius_km: Number(radiusEl.value) };
+    renderMarkers();
+    renderRing();
     coordEl.innerHTML =
       `Selected: <b>${lat.toFixed(3)}, ${lng.toFixed(3)}</b>`;
     goBtn.disabled = false;
     goBtn.textContent = "Explore this place";
-  });
+  }
 
-  function renderMarker() {
-    if (!selected) {
-      globe.pointsData([]).ringsData([]);
-      return;
+  // An existing saved marker: sync the controls, ping its stored radius, and
+  // load the recorded information immediately.
+  function openSavedMarker(m) {
+    selected = null; // this is a past place, not a fresh red pick
+    globe.controls().autoRotate = false;
+    activeRing = { lat: m.lat, lng: m.lon, radius_km: m.radius_km };
+    layerEl.value = m.layer;
+    radiusEl.value = m.radius_km;
+    radiusLabel.textContent = m.radius_km;
+    coordEl.innerHTML =
+      `Saved: <b>${m.lat.toFixed(3)}, ${m.lon.toFixed(3)}</b>`;
+    goBtn.disabled = true;
+    goBtn.textContent = "Explore this place";
+    renderMarkers();
+    renderRing();
+    explore(m.lat, m.lon, m.radius_km, m.layer, { saved: true });
+  }
+
+  // Draw all saved markers (light blue) plus the current fresh pick (red).
+  function renderMarkers() {
+    const pts = savedMarkers.map((m) => ({
+      lat: m.lat, lng: m.lon, kind: "saved", data: m,
+    }));
+    if (selected) {
+      pts.push({ lat: selected.lat, lng: selected.lng, kind: "selected" });
     }
-    const pt = { lat: selected.lat, lng: selected.lng };
     globe
-      .pointsData([pt])
+      .pointsData(pts)
       .pointLat("lat")
       .pointLng("lng")
-      .pointColor(() => "#4ea3ff")
+      .pointColor((d) => (d.kind === "selected" ? "#ff4d4d" : "#4ea3ff"))
       .pointAltitude(0.02)
       .pointRadius(0.35);
-    // A pulsing ring to make the selection obvious.
+  }
+
+  // Draw the ping ring for the active location, sized to its radius in km.
+  function renderRing() {
+    if (!activeRing) {
+      globe.ringsData([]);
+      return;
+    }
+    const maxDeg = Math.max(0.4, activeRing.radius_km / KM_PER_DEG);
     globe
-      .ringsData([pt])
+      .ringsData([{ lat: activeRing.lat, lng: activeRing.lng }])
       .ringLat("lat")
       .ringLng("lng")
       .ringColor(() => (t) => `rgba(78,163,255,${1 - t})`)
-      .ringMaxRadius(4)
-      .ringPropagationSpeed(3)
+      .ringMaxRadius(maxDeg)
+      .ringPropagationSpeed(maxDeg * 0.75)
       .ringRepeatPeriod(900);
   }
+
+  // Load previously explored markers from the server on startup.
+  async function loadMarkers() {
+    try {
+      const res = await fetch("/markers");
+      if (!res.ok) return;
+      savedMarkers = await res.json();
+      renderMarkers();
+    } catch (_) { /* offline / first run — ignore */ }
+  }
+  loadMarkers();
 
   // --- Radius slider ------------------------------------------------------
   radiusEl.addEventListener("input", () => {
     radiusLabel.textContent = radiusEl.value;
+    // Resize the live ping while a fresh pick is active.
+    if (selected && activeRing) {
+      activeRing.radius_km = Number(radiusEl.value);
+      renderRing();
+    }
   });
 
   // --- Explore action -----------------------------------------------------
   goBtn.addEventListener("click", runQuery);
-  closeBtn.addEventListener("click", () => results.classList.remove("open"));
+  closeBtn.addEventListener("click", () => {
+    results.classList.remove("open");
+    reopenBtn.classList.add("show");
+  });
+  reopenBtn.addEventListener("click", () => {
+    results.classList.add("open");
+    reopenBtn.classList.remove("show");
+  });
 
   async function runQuery() {
     if (!selected) return;
-    const lat = selected.lat;
-    const lon = selected.lng;
-    const radius = Number(radiusEl.value);
-    const layer = layerEl.value;
+    explore(selected.lat, selected.lng, Number(radiusEl.value), layerEl.value, {
+      saved: false,
+    });
+  }
 
+  async function explore(lat, lon, radius, layer, { saved = false } = {}) {
     openPanel();
     showStatus(
-      `<div class="spinner"></div>Gathering grounded information…<br>` +
-      `<small>This calls a live model and can take up to a minute.</small>`
+      saved
+        ? `<div class="spinner"></div>Loading saved exploration…`
+        : `<div class="spinner"></div>Gathering grounded information…<br>` +
+            `<small>This calls a live model and can take up to a minute.</small>`
     );
-    rTitle.textContent = "Exploring…";
+    rTitle.textContent = saved ? "Loading…" : "Exploring…";
     rSub.textContent = `${layer} · ${lat.toFixed(2)}, ${lon.toFixed(2)} · ${radius} km`;
     goBtn.disabled = true;
 
@@ -118,6 +233,10 @@
       }
       const data = await res.json();
       renderResults(data);
+      // The place is now recorded — clear the red pick and refresh the saved
+      // markers so it appears as a persistent light-blue marker.
+      selected = null;
+      await loadMarkers();
     } catch (err) {
       showStatus(
         `<p style="color:var(--warn)">Network error.</p><p>${escapeHtml(String(err))}</p>`
@@ -130,6 +249,7 @@
   // --- Rendering ----------------------------------------------------------
   function openPanel() {
     results.classList.add("open");
+    reopenBtn.classList.remove("show");
   }
 
   function showStatus(html) {
