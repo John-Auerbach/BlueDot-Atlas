@@ -175,7 +175,7 @@ import * as solar from "https://esm.sh/solar-calculator@0.3";
       // band), peaking where day meets night. Only when day/night is on.
       vec3 col = glowColor;
       float twilight = (1.0 - smoothstep(0.0, 0.4, abs(sun))) * sunFade;
-      col = mix(col, vec3(1.0, 0.55, 0.32), twilight * 0.6);
+      col = mix(col, vec3(1.0, 0.42, 0.18), twilight * 0.7);
 
       gl_FragColor = vec4(col * glow, glow);
     }
@@ -447,7 +447,13 @@ import * as solar from "https://esm.sh/solar-calculator@0.3";
       float lit = mix(0.08, 1.0, smoothstep(-0.2, 0.25, sun));
       float shade = mix(1.0, lit, sunFade);
 
-      gl_FragColor = vec4(vec3(shade), a);
+      // Sunset tint: warm the clouds just past the terminator, biased toward
+      // the night side (centered at sun = -0.08, not at 0).
+      vec3 col = vec3(shade);
+      float twilight = (1.0 - smoothstep(0.0, 0.36, abs(sun + 0.12))) * sunFade;
+      col = mix(col, col * vec3(1.0, 0.55, 0.32), twilight * 0.3);
+
+      gl_FragColor = vec4(col, a);
     }
   `;
 
