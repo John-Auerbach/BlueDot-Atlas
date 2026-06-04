@@ -174,9 +174,13 @@ import * as solar from "https://esm.sh/solar-calculator@0.3";
 
       // Sunset tint: warm the halo toward red along the terminator (twilight
       // band), peaking where day meets night. Only when day/night is on.
+      // Centre is biased onto the NIGHT side (sun < 0) so the orange sits just
+      // past the terminator into dusk rather than straddling it evenly.
       vec3 col = glowColor;
-      float twilight = (1.0 - smoothstep(0.0, 0.4, abs(sun))) * sunFade;
-      col = mix(col, vec3(1.0, 0.42, 0.18), twilight * 0.7);
+      float twilight = (1.0 - smoothstep(0.0, 0.6, abs(sun + 0.18))) * sunFade;
+      col = mix(col, vec3(1.0, 0.75, 0.58), twilight * 0.9);
+      // Extra orange glow boost across the wider twilight band.
+      glow *= 1.0 + twilight * 1.0;
 
       gl_FragColor = vec4(col * glow, glow);
     }
@@ -610,21 +614,44 @@ import * as solar from "https://esm.sh/solar-calculator@0.3";
       float band = exp(-pow((colat - cN) / sigma, 2.0))
                  + exp(-pow((colat - cS) / sigma, 2.0));
 
-      // SECONDARY oval — a second ring at a slightly different latitude that
-      // drifts independently. Its strength is gated patchwise around the pole
-      // and in time, so it fades in and out and only covers parts of the ring.
-      // This is what lets the aurora split into two rings or break into arcs
-      // and morph between those states instead of being a single clean circle.
+      // SECONDARY oval — a second ring whose latitude separation from the main
+      // oval slowly breathes in and out. When the separation goes to ~0 the two
+      // rings COMBINE into one; when it grows they SPLIT into two clear rings.
       float snake2 = 0.05 * sin(lon * 1.0 - time * 0.17)
                    + 0.03 * sin(lon * 4.0 + time * 0.11);
-      float off = toRad(3.0) + toRad(1.5) * sin(time * 0.07);
+      // Separation swings from nearly coincident up to a wide split.
+      float sep = 0.5 + 0.5 * sin(time * 0.06);            // 0..1 breathing
+      float off = toRad(0.4) + toRad(5.5) * sep;
       float cN2 = toRad(23.0) + off + snake2;
       float cS2 = toRad(157.0) - off + snake2;
+      // Ring 2 is mostly present, but still patchy so it can be partial arcs.
       float g2 = noise(vec2(lon * 1.3 + 5.0, time * 0.05));
-      float amp2 = smoothstep(0.35, 0.75, g2);     // patchy presence of ring 2
+      float amp2 = mix(0.55, 1.0, smoothstep(0.25, 0.8, g2));
       float band2 = exp(-pow((colat - cN2) / sigma, 2.0))
                   + exp(-pow((colat - cS2) / sigma, 2.0));
       band = max(band, band2 * amp2);
+
+      // WANDERING ARC — an extra open ribbon that occasionally snakes through
+      // the polar region at its own drifting latitude and meander, NOT tied to
+      // the main oval and not required to cross the pole. It fades in and out,
+      // so now and then a loose arc wanders across the cap instead of the
+      // aurora being one clean circle.
+      float arcLat = toRad(mix(14.0, 30.0, 0.5 + 0.5 * sin(time * 0.05)));
+      float arcSnake = 0.10 * sin(lon * 1.5 + time * 0.25)
+                     + 0.06 * sin(lon * 2.5 - time * 0.18)
+                     + 0.04 * sin(lon * 4.0 + time * 0.33);
+      float arcCN = arcLat + arcSnake;
+      float arcCS = (PI - arcLat) + arcSnake;
+      float arcSig = toRad(2.0);
+      float arcBand = exp(-pow((colat - arcCN) / arcSig, 2.0))
+                    + exp(-pow((colat - arcCS) / arcSig, 2.0));
+      // Only present over a slowly moving stretch of longitude, and pulsing in
+      // and out over time, so it's an occasional partial arc.
+      float arcWhere = noise(vec2(lon * 0.7 - 9.0, time * 0.04));
+      float arcLife = noise(vec2(21.0, time * 0.05));
+      float arcAmp = smoothstep(0.45, 0.75, arcWhere) * smoothstep(0.5, 0.8, arcLife);
+      band = max(band, arcBand * arcAmp);
+
       if (band < 0.01) return 0.0;
 
       // Soft brightness variation ALONG the ribbon (longitude) — broad, low
@@ -653,8 +680,18 @@ import * as solar from "https://esm.sh/solar-calculator@0.3";
       float gap = smoothstep(0.22, 0.42, gmask);   // 0 = broken, 1 = present
       streak *= gap;
 
-      // Brightest near the surface, fading up the curtain.
-      float vfade = smoothstep(0.0, 0.05, up) * smoothstep(1.0, 0.25, up);
+      // THICKNESS TRANSIENTS — the curtain is taller (thicker) in some places,
+      // and those thick zones TRAVEL along the ribbon like a wave. A base slow
+      // field gives stationary thick/thin stretches; a second term moves at a
+      // steady speed in longitude so bulges of thickness propagate along it.
+      float tBase = noise(vec2(lon * 1.1 + 17.0, time * 0.05));
+      float tWave = noise(vec2(lon * 2.6 - time * 0.9, 41.0));  // travels in lon
+      float thick = mix(tBase, tWave, 0.5);
+      float topH = mix(0.45, 1.0, smoothstep(0.25, 0.85, thick));  // curtain top
+
+      // Brightest near the surface, fading up the curtain — capped at topH so
+      // the curtain height (thickness) varies and the thick zones travel.
+      float vfade = smoothstep(0.0, 0.05, up) * smoothstep(topH, topH * 0.35, up);
       return band * streak * vfade;
     }
 
