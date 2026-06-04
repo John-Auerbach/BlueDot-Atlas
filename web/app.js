@@ -121,6 +121,9 @@ import * as solar from "https://esm.sh/solar-calculator@0.3";
     uniform vec2 sunPosition;
     uniform vec2 globeRotation;
     uniform float sunFade;
+    uniform float gaussian;
+    uniform float peak;
+    uniform float width;
     varying vec3 vNormal;
     varying vec3 vViewPosition;
 
@@ -136,11 +139,20 @@ import * as solar from "https://esm.sh/solar-calculator@0.3";
       // facing ~1 looking straight at the surface, ~0 at the grazing limb.
       float facing = clamp(dot(vNormal, viewDir), 0.0, 1.0);
       float d = 1.0 - facing; // 0 at the disc centre, 1 at the silhouette.
-      // rise: even haze (base) plus a swell toward the limb.
-      // pow(facing, fade) pulls the glow back to zero right at the silhouette
-      // so the outer halo has no hard ring — it dissolves into space.
-      float rise = base + (1.0 - base) * pow(d, power);
-      float glow = rise * pow(facing, fade) * intensity;
+      float glow;
+      if (gaussian > 0.5) {
+        // Gaussian altitude band: glow ramps UP with altitude (toward the
+        // limb), peaks at the peak uniform, then ramps back down -- a soft
+        // shell of light floating above the surface, not a surface gradient.
+        float g = exp(-pow((d - peak) / width, 2.0));
+        glow = g * intensity;
+      } else {
+        // rise: even haze (base) plus a swell toward the limb.
+        // pow(facing, fade) pulls the glow back to zero right at the silhouette
+        // so the outer halo has no hard ring — it dissolves into space.
+        float rise = base + (1.0 - base) * pow(d, power);
+        glow = rise * pow(facing, fade) * intensity;
+      }
 
       // Sun-aware fade: the halo is brightest on the sunlit hemisphere and
       // fades toward the night side. Compute the sun direction in view space
@@ -153,20 +165,26 @@ import * as solar from "https://esm.sh/solar-calculator@0.3";
       vec3 sunDir = normalize(rotX * rotY * Polar2Cartesian(sunPosition));
       float sun = dot(normalize(vNormal), sunDir);
       // 0.18 ambient so the dark limb keeps a faint trace instead of vanishing.
-      float dayFade = mix(0.18, 1.0, smoothstep(-0.45, 0.25, sun));
+      float dayFade = mix(0.18, 1.0, smoothstep(-0.75, 0.25, sun));
       // sunFade (0..1) blends between an even halo and the sun-aware fade, so
       // the day-side-only halo is active only when day/night is enabled.
       glow *= mix(1.0, dayFade, sunFade);
 
-      gl_FragColor = vec4(glowColor * glow, glow);
+      // Sunset tint: warm the halo toward red along the terminator (twilight
+      // band), peaking where day meets night. Only when day/night is on.
+      vec3 col = glowColor;
+      float twilight = (1.0 - smoothstep(0.0, 0.4, abs(sun))) * sunFade;
+      col = mix(col, vec3(1.0, 0.55, 0.32), twilight * 0.6);
+
+      gl_FragColor = vec4(col * glow, glow);
     }
   `;
 
-  function makeShell(radiusScale, side, { base, power, fade, intensity }) {
+  function makeShell(radiusScale, side, { base, power, fade, intensity, gaussian = false, peak = 0.5, width = 0.25 }) {
     const geom = new THREE.SphereGeometry(GLOBE_R * radiusScale, 64, 48);
     const mat = new THREE.ShaderMaterial({
       uniforms: {
-        glowColor: { value: new THREE.Color("#ffffff") },
+        glowColor: { value: new THREE.Color("#a9ccff") },
         base: { value: base },
         power: { value: power },
         fade: { value: fade },
@@ -174,6 +192,9 @@ import * as solar from "https://esm.sh/solar-calculator@0.3";
         sunPosition: { value: new THREE.Vector2() },
         globeRotation: { value: new THREE.Vector2() },
         sunFade: { value: 0.0 },
+        gaussian: { value: gaussian ? 1.0 : 0.0 },
+        peak: { value: peak },
+        width: { value: width },
       },
       vertexShader: ATMO_VERT,
       fragmentShader: ATMO_FRAG,
@@ -188,19 +209,12 @@ import * as solar from "https://esm.sh/solar-calculator@0.3";
   // Front shell: a very faint, even white haze laid over the whole visible
   // hemisphere that lifts softly toward the limb — the diffuse glow on the
   // planet itself. fade 0 keeps the haze all the way to the edge.
-  const atmoInner = makeShell(1.004, THREE.FrontSide, {
-    base: 0.12, power: 2.0, fade: 0.0, intensity: 0.5,
-  });
-  // Outer shell: a thin, soft white band just past the silhouette. The fade
-  // term forces it to zero at the outer edge, so it melts into space with no
-  // sharp boundary.
-  const atmoOuter = makeShell(1.05, THREE.BackSide, {
-    base: 0.0, power: 2.0, fade: 2.5, intensity: 1.4,
+  const atmoInner = makeShell(1.015, THREE.FrontSide, {
+    base: 0.05, power: 2.0, fade: 0.5, intensity: 1.1,
   });
 
   const atmoGroup = new THREE.Group();
   atmoGroup.add(atmoInner);
-  atmoGroup.add(atmoOuter);
 
   function applyAtmosphere() {
     const scene = globe.scene();
@@ -220,7 +234,7 @@ import * as solar from "https://esm.sh/solar-calculator@0.3";
     const sun = sunPosAt(Date.now());
     const pov = globe.pointOfView();
     const sunFade = dayNightEl.checked ? 1.0 : 0.0;
-    for (const mesh of [atmoInner, atmoOuter]) {
+    for (const mesh of [atmoInner]) {
       const u = mesh.material.uniforms;
       u.sunPosition.value.set(sun[0], sun[1]);
       u.globeRotation.value.set(pov.lng, pov.lat);
@@ -312,7 +326,9 @@ import * as solar from "https://esm.sh/solar-calculator@0.3";
       vec3 nightCol = duskEarth + cityLights;
 
       float blend = smoothstep(-0.1, 0.1, intensity);
-      gl_FragColor = vec4(mix(nightCol, dayColor.rgb, blend), 1.0);
+      vec3 surface = mix(nightCol, dayColor.rgb, blend);
+
+      gl_FragColor = vec4(surface, 1.0);
     }
   `;
 
