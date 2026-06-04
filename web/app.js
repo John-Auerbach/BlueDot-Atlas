@@ -112,13 +112,25 @@ import * as solar from "https://esm.sh/solar-calculator@0.3";
     }
   `;
   const ATMO_FRAG = `
+    #define PI 3.141592653589793
     uniform vec3 glowColor;
     uniform float base;
     uniform float power;
     uniform float fade;
     uniform float intensity;
+    uniform vec2 sunPosition;
+    uniform vec2 globeRotation;
+    uniform float sunFade;
     varying vec3 vNormal;
     varying vec3 vViewPosition;
+
+    float toRad(in float a) { return a * PI / 180.0; }
+    vec3 Polar2Cartesian(in vec2 c) { // [lng, lat]
+      float theta = toRad(90.0 - c.x);
+      float phi = toRad(90.0 - c.y);
+      return vec3(sin(phi) * cos(theta), cos(phi), sin(phi) * sin(theta));
+    }
+
     void main() {
       vec3 viewDir = normalize(vViewPosition);
       // facing ~1 looking straight at the surface, ~0 at the grazing limb.
@@ -129,6 +141,23 @@ import * as solar from "https://esm.sh/solar-calculator@0.3";
       // so the outer halo has no hard ring — it dissolves into space.
       float rise = base + (1.0 - base) * pow(d, power);
       float glow = rise * pow(facing, fade) * intensity;
+
+      // Sun-aware fade: the halo is brightest on the sunlit hemisphere and
+      // fades toward the night side. Compute the sun direction in view space
+      // the same way the day/night surface shader does, then dot with the
+      // shell normal.
+      float invLon = toRad(globeRotation.x);
+      float invLat = -toRad(globeRotation.y);
+      mat3 rotX = mat3(1.0, 0.0, 0.0, 0.0, cos(invLat), -sin(invLat), 0.0, sin(invLat), cos(invLat));
+      mat3 rotY = mat3(cos(invLon), 0.0, sin(invLon), 0.0, 1.0, 0.0, -sin(invLon), 0.0, cos(invLon));
+      vec3 sunDir = normalize(rotX * rotY * Polar2Cartesian(sunPosition));
+      float sun = dot(normalize(vNormal), sunDir);
+      // 0.18 ambient so the dark limb keeps a faint trace instead of vanishing.
+      float dayFade = mix(0.18, 1.0, smoothstep(-0.45, 0.25, sun));
+      // sunFade (0..1) blends between an even halo and the sun-aware fade, so
+      // the day-side-only halo is active only when day/night is enabled.
+      glow *= mix(1.0, dayFade, sunFade);
+
       gl_FragColor = vec4(glowColor * glow, glow);
     }
   `;
@@ -142,6 +171,9 @@ import * as solar from "https://esm.sh/solar-calculator@0.3";
         power: { value: power },
         fade: { value: fade },
         intensity: { value: intensity },
+        sunPosition: { value: new THREE.Vector2() },
+        globeRotation: { value: new THREE.Vector2() },
+        sunFade: { value: 0.0 },
       },
       vertexShader: ATMO_VERT,
       fragmentShader: ATMO_FRAG,
@@ -174,9 +206,27 @@ import * as solar from "https://esm.sh/solar-calculator@0.3";
     const scene = globe.scene();
     if (atmosphereEl.checked) {
       if (!atmoGroup.parent) scene.add(atmoGroup);
+      if (atmoRaf === null) atmoTick();
     } else if (atmoGroup.parent) {
       scene.remove(atmoGroup);
+      if (atmoRaf !== null) {
+        cancelAnimationFrame(atmoRaf);
+        atmoRaf = null;
+      }
     }
+  }
+  let atmoRaf = null;
+  function atmoTick() {
+    const sun = sunPosAt(Date.now());
+    const pov = globe.pointOfView();
+    const sunFade = dayNightEl.checked ? 1.0 : 0.0;
+    for (const mesh of [atmoInner, atmoOuter]) {
+      const u = mesh.material.uniforms;
+      u.sunPosition.value.set(sun[0], sun[1]);
+      u.globeRotation.value.set(pov.lng, pov.lat);
+      u.sunFade.value = sunFade;
+    }
+    atmoRaf = requestAnimationFrame(atmoTick);
   }
   atmosphereEl.addEventListener("change", applyAtmosphere);
   applyAtmosphere();
@@ -249,7 +299,12 @@ import * as solar from "https://esm.sh/solar-calculator@0.3";
       // Cities are red-rich; land/ocean are blue-dominant and dark. Use the red
       // channel to keep ONLY the real city-light data and make the rest black.
       float light = smoothstep(0.08, 0.30, nightColor.r);
-      vec3 cityLights = nightColor.rgb * light * 1.9;
+      // Warm, bright city lights (amber tint), boosted.
+      vec3 cityLights = nightColor.rgb * vec3(1.0, 0.85, 0.62) * light * 2.4;
+      // Only fade the city lights in once we're past twilight (well into the
+      // dark side), so they aren't blazing along the terminator.
+      float nightDepth = smoothstep(0.0, -0.25, intensity);
+      cityLights *= nightDepth;
       // Faint dim earth so the dark side is still visible, not pure black.
       // Keep a good amount of the day map's color (not full grayscale).
       vec3 tint = mix(vec3(dayLum), dayColor.rgb, 0.6);
