@@ -594,9 +594,9 @@ import * as solar from "https://esm.sh/solar-calculator@0.3";
       // Strong, low-frequency meander of the oval centre so the whole ribbon
       // SNAKES around the pole instead of sitting on a fixed circle. Amplitude
       // is comparable to the band width, so the band visibly waves in and out.
-      float snake = 0.10 * sin(lon * 2.0 + time * 0.35)
-                  + 0.06 * sin(lon * 3.0 - time * 0.25)
-                  + 0.03 * sin(lon * 5.0 + time * 0.5);
+      float snake = 0.06 * sin(lon * 2.0 + time * 0.22)
+                  + 0.038 * sin(lon * 3.0 - time * 0.16)
+                  + 0.02 * sin(lon * 5.0 + time * 0.32);
       float cN = toRad(23.0) + snake;
       float cS = toRad(157.0) + snake;
       float sigma = toRad(3.2);                    // half-width of the band
@@ -608,8 +608,8 @@ import * as solar from "https://esm.sh/solar-calculator@0.3";
       // contrast swells rather than hard blades, so it no longer looks sliced.
       // The flow follows the ribbon as it snakes (lon offset by the meander).
       float flow = lon * 6.0 + snake * 8.0;
-      float n = noise(vec2(flow, time * 0.2 + up * 0.4));
-      n += 0.5 * noise(vec2(flow * 2.1 + 11.0, time * 0.33));
+      float n = noise(vec2(flow, time * 0.13 + up * 0.4));
+      n += 0.5 * noise(vec2(flow * 2.1 + 11.0, time * 0.22));
       n /= 1.5;
       float streak = mix(0.35, 1.0, smoothstep(0.2, 0.9, n));
 
@@ -647,7 +647,7 @@ import * as solar from "https://esm.sh/solar-calculator@0.3";
         vec3 col = mix(green, magenta, smoothstep(0.25, 1.0, up));
         acc += col * dens;
       }
-      acc *= dt * 0.08;   // integrate; scale to taste
+      acc *= dt * 0.05;   // integrate; scale to taste
       float lum = max(acc.r, max(acc.g, acc.b));
       if (lum <= 0.001) discard;
       gl_FragColor = vec4(acc, lum);
