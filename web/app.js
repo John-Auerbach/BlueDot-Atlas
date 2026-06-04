@@ -177,10 +177,8 @@ import * as solar from "https://esm.sh/solar-calculator@0.3";
       // Centre is biased onto the NIGHT side (sun < 0) so the orange sits just
       // past the terminator into dusk rather than straddling it evenly.
       vec3 col = glowColor;
-      float twilight = (1.0 - smoothstep(0.0, 0.6, abs(sun + 0.18))) * sunFade;
-      col = mix(col, vec3(1.0, 0.75, 0.58), twilight * 0.9);
-      // Extra orange glow boost across the wider twilight band.
-      glow *= 1.0 + twilight * 1.0;
+      float twilight = (1.0 - smoothstep(0.0, 0.55, abs(sun + 0.28))) * sunFade;
+      col = mix(col, vec3(1.0, 0.42, 0.16), twilight * 0.65);
 
       gl_FragColor = vec4(col * glow, glow);
     }
@@ -216,7 +214,7 @@ import * as solar from "https://esm.sh/solar-calculator@0.3";
   // hemisphere that lifts softly toward the limb — the diffuse glow on the
   // planet itself. fade 0 keeps the haze all the way to the edge.
   const atmoInner = makeShell(1.02, THREE.FrontSide, {
-    base: 0.05, power: 2.0, fade: 0.5, intensity: 1.1,
+    base: 0.05, power: 2.0, fade: 0.5, intensity: 1.4,
   });
 
   const atmoGroup = new THREE.Group();
@@ -455,8 +453,8 @@ import * as solar from "https://esm.sh/solar-calculator@0.3";
       // Sunset tint: warm the clouds just past the terminator, biased toward
       // the night side (centered at sun = -0.08, not at 0).
       vec3 col = vec3(shade);
-      float twilight = (1.0 - smoothstep(0.0, 0.36, abs(sun + 0.12))) * sunFade;
-      col = mix(col, col * vec3(1.0, 0.55, 0.32), twilight * 0.3);
+      float twilight = (1.0 - smoothstep(0.0, 0.5, abs(sun + 0.2))) * sunFade;
+      col = mix(col, col * vec3(1.0, 0.45, 0.18), twilight * 0.55);
 
       gl_FragColor = vec4(col, a);
     }
