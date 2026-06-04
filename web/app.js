@@ -732,14 +732,14 @@ import * as solar from "https://esm.sh/solar-calculator@0.3";
         float storm = smoothstep(0.45, 0.7, act);    // patchy intense regions
         // Red builds through the upper half of the curtain; gate opens low
         // enough that the still-dense part of the curtain reddens.
-        float redMix = storm * smoothstep(0.3, 0.7, up);
+        float redMix = storm * smoothstep(0.1, 0.45, up);
         col = mix(col, red, redMix);
         // Intense red patches also glow a bit brighter (oxygen line).
         dens *= 1.0 + 0.8 * redMix;
 
         acc += col * dens;
       }
-      acc *= dt * 0.065;   // integrate; scale to taste
+      acc *= dt * 0.05;   // integrate; scale to taste
       float lum = max(acc.r, max(acc.g, acc.b));
       if (lum <= 0.001) discard;
       gl_FragColor = vec4(acc, lum);
@@ -994,7 +994,7 @@ import * as solar from "https://esm.sh/solar-calculator@0.3";
     const data = bordersEl.checked ? borderFeatures : [];
     globe
       .pathsData(data)
-      .pathColor(() => "rgba(120,180,255,0.55)")
+      .pathColor(() => "rgba(200,200,200,0.55)")
       .pathStroke(0.6)
       .pathPointAlt(0.004)
       .pathTransitionDuration(0);
