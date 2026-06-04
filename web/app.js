@@ -543,7 +543,7 @@ import * as solar from "https://esm.sh/solar-calculator@0.3";
     #define PI 3.141592653589793
     #define GLOBE_R 100.0
     #define A_BASE 1.0      // inner radius of the shell = GLOBE_R + A_BASE
-    #define A_HEIGHT 22.0   // radial thickness of the shell (curtain height)
+    #define A_HEIGHT 14.0   // radial thickness of the shell (curtain height)
     #define STEPS 48
     uniform float time;
     uniform vec2 sunPosition;
@@ -597,11 +597,29 @@ import * as solar from "https://esm.sh/solar-calculator@0.3";
       float snake = 0.06 * sin(lon * 2.0 + time * 0.22)
                   + 0.038 * sin(lon * 3.0 - time * 0.16)
                   + 0.02 * sin(lon * 5.0 + time * 0.32);
+      float sigma = toRad(1.6);                    // half-width of the band
+
+      // PRIMARY oval.
       float cN = toRad(23.0) + snake;
       float cS = toRad(157.0) + snake;
-      float sigma = toRad(3.2);                    // half-width of the band
       float band = exp(-pow((colat - cN) / sigma, 2.0))
                  + exp(-pow((colat - cS) / sigma, 2.0));
+
+      // SECONDARY oval — a second ring at a slightly different latitude that
+      // drifts independently. Its strength is gated patchwise around the pole
+      // and in time, so it fades in and out and only covers parts of the ring.
+      // This is what lets the aurora split into two rings or break into arcs
+      // and morph between those states instead of being a single clean circle.
+      float snake2 = 0.05 * sin(lon * 1.0 - time * 0.17)
+                   + 0.03 * sin(lon * 4.0 + time * 0.11);
+      float off = toRad(3.0) + toRad(1.5) * sin(time * 0.07);
+      float cN2 = toRad(23.0) + off + snake2;
+      float cS2 = toRad(157.0) - off + snake2;
+      float g2 = noise(vec2(lon * 1.3 + 5.0, time * 0.05));
+      float amp2 = smoothstep(0.35, 0.75, g2);     // patchy presence of ring 2
+      float band2 = exp(-pow((colat - cN2) / sigma, 2.0))
+                  + exp(-pow((colat - cS2) / sigma, 2.0));
+      band = max(band, band2 * amp2);
       if (band < 0.01) return 0.0;
 
       // Soft brightness variation ALONG the ribbon (longitude) — broad, low
@@ -611,7 +629,16 @@ import * as solar from "https://esm.sh/solar-calculator@0.3";
       float n = noise(vec2(flow, time * 0.13 + up * 0.4));
       n += 0.5 * noise(vec2(flow * 2.1 + 11.0, time * 0.22));
       n /= 1.5;
-      float streak = mix(0.35, 1.0, smoothstep(0.2, 0.9, n));
+      float streak = mix(0.6, 1.0, smoothstep(0.2, 0.9, n));
+
+      // BREAKS — a slow large-scale mask along longitude that can pull the
+      // ribbon apart into separate arcs and then heal it back together, so the
+      // ring isn't always closed. Gaps open and migrate over time.
+      float gmask = noise(vec2(lon * 0.8 + 20.0, time * 0.045));
+      gmask += 0.5 * noise(vec2(lon * 1.7 - 7.0, time * 0.08));
+      gmask /= 1.5;
+      float gap = smoothstep(0.22, 0.42, gmask);   // 0 = broken, 1 = present
+      streak *= gap;
 
       // Brightest near the surface, fading up the curtain.
       float vfade = smoothstep(0.0, 0.05, up) * smoothstep(1.0, 0.2, up);
@@ -647,7 +674,7 @@ import * as solar from "https://esm.sh/solar-calculator@0.3";
         vec3 col = mix(green, magenta, smoothstep(0.25, 1.0, up));
         acc += col * dens;
       }
-      acc *= dt * 0.05;   // integrate; scale to taste
+      acc *= dt * 0.065;   // integrate; scale to taste
       float lum = max(acc.r, max(acc.g, acc.b));
       if (lum <= 0.001) discard;
       gl_FragColor = vec4(acc, lum);
