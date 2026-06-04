@@ -7,6 +7,7 @@
 
 import Globe from "globe.gl";
 import * as THREE from "three";
+import * as solar from "https://esm.sh/solar-calculator@0.3";
 
 (function () {
   "use strict";
@@ -76,6 +77,13 @@ import * as THREE from "three";
 
   function applyHdMap() {
     if (hdMapEl.checked) {
+      // The tile engine paints over the globe surface, which would hide the
+      // day/night shader material. They can't both own the surface, so turning
+      // on HD turns off day/night.
+      if (dayNightEl.checked) {
+        dayNightEl.checked = false;
+        applyDayNight();
+      }
       globe.globeTileEngineMaxLevel(SAT_MAX_LEVEL).globeTileEngineUrl(SAT_TILE);
     } else {
       globe.globeTileEngineUrl(null).globeImageUrl(TEX_BASE).bumpImageUrl(TEX_BASE_BUMP);
@@ -174,123 +182,139 @@ import * as THREE from "three";
   applyAtmosphere();
 
   // --- Realism: day / night + city lights --------------------------------
-  // Two shells sitting just above the surface, both driven by a "sun
-  // direction" uniform so they only affect the hemisphere facing away from the
-  // sun:
-  //   • a soft dark veil that dims the night side (the terminator), and
-  //   • the NASA night-lights texture added on top so cities glow in the dark.
-  // The sun direction is the real sub-solar point for the current UTC time, so
-  // the terminator falls where it actually is right now. We sample the lights
-  // texture analytically from the surface normal (matching three-globe's
-  // lat/lng convention) so the lights line up with the continents regardless
-  // of the shell geometry's own UVs.
-  const DEG = Math.PI / 180;
-
-  // Sub-solar point → a unit vector in three-globe's world space.
-  function sunDirection() {
-    const now = new Date();
-    const yearStart = Date.UTC(now.getUTCFullYear(), 0, 0);
-    const today = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
-    const dayOfYear = (today - yearStart) / 86400000;
-    // Solar declination (approx) and the longitude the sun is overhead.
-    const decl = -23.44 * Math.cos((2 * Math.PI / 365) * (dayOfYear + 10));
-    const utcHours = now.getUTCHours() + now.getUTCMinutes() / 60 + now.getUTCSeconds() / 3600;
-    const lng = -15 * (utcHours - 12); // sun over 0° lng at 12:00 UTC
-    const lat = decl;
-    // three-globe polar→cartesian convention.
-    const phi = (90 - lat) * DEG;
-    const theta = (90 - lng) * DEG;
-    return new THREE.Vector3(
-      Math.sin(phi) * Math.cos(theta),
-      Math.cos(phi),
-      Math.sin(phi) * Math.sin(theta)
-    ).normalize();
-  }
-
-  const sunUniform = { value: sunDirection() };
+  // The robust, official globe.gl technique: replace the globe's OWN surface
+  // material with a shader that mixes a daytime map and the NASA night-lights
+  // map across the terminator. Because it IS the globe surface (not an overlay
+  // sphere), there is no z-fighting, the texture UVs line up perfectly, and the
+  // night side shows city lights at full brightness with no dimming veil.
+  //
+  // sunPosition is the real sub-solar [lng, lat] for the current time (via
+  // solar-calculator). globeRotation carries the current point-of-view so the
+  // shader can bring the world-space sun direction into the globe's view frame.
+  const baseMaterial = globe.globeMaterial();
 
   const DN_VERT = `
-    varying vec3 vWorldNormal;
+    varying vec3 vNormal;
+    varying vec2 vUv;
     void main() {
-      vWorldNormal = normalize(mat3(modelMatrix) * normal);
+      vNormal = normalize(normalMatrix * normal);
+      vUv = uv;
       gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
     }
   `;
+  const DN_FRAG = `
+    #define PI 3.141592653589793
+    uniform sampler2D dayTexture;
+    uniform sampler2D nightTexture;
+    uniform vec2 sunPosition;
+    uniform vec2 globeRotation;
+    varying vec3 vNormal;
+    varying vec2 vUv;
 
-  // Dark veil: black, normal-blended, alpha rises on the night side.
-  const SHADE_FRAG = `
-    uniform vec3 sunDir;
-    varying vec3 vWorldNormal;
+    float toRad(in float a) { return a * PI / 180.0; }
+
+    vec3 Polar2Cartesian(in vec2 c) { // [lng, lat]
+      float theta = toRad(90.0 - c.x);
+      float phi = toRad(90.0 - c.y);
+      return vec3(sin(phi) * cos(theta), cos(phi), sin(phi) * sin(theta));
+    }
+
     void main() {
-      float d = dot(normalize(vWorldNormal), normalize(sunDir));
-      // 0 on the day side, 1 deep on the night side, soft across the terminator.
-      float night = smoothstep(0.12, -0.18, d);
-      gl_FragColor = vec4(0.0, 0.0, 0.0, night * 0.8);
+      float invLon = toRad(globeRotation.x);
+      float invLat = -toRad(globeRotation.y);
+      mat3 rotX = mat3(
+        1, 0, 0,
+        0, cos(invLat), -sin(invLat),
+        0, sin(invLat), cos(invLat)
+      );
+      mat3 rotY = mat3(
+        cos(invLon), 0, sin(invLon),
+        0, 1, 0,
+        -sin(invLon), 0, cos(invLon)
+      );
+      vec3 sunDir = rotX * rotY * Polar2Cartesian(sunPosition);
+      float intensity = dot(normalize(vNormal), normalize(sunDir));
+      vec4 dayColor = texture2D(dayTexture, vUv);
+      vec4 nightColor = texture2D(nightTexture, vUv);
+
+      // Night side: a DIM, desaturated version of the day map so the planet is
+      // still visible (continents/oceans readable) but low-contrast, so bright
+      // deserts like the Sahara don't blaze. Then add the NASA "black marble"
+      // night texture on top — it is real city-lights DATA (black everywhere
+      // except cities), so the glow lands exactly on populated areas. No
+      // luminance-thresholding of the day map, so snow/desert never glow.
+      float dayLum = dot(dayColor.rgb, vec3(0.299, 0.587, 0.114));
+      // The night texture isn't pure black marble: its land/ocean is a dim
+      // teal-blue, while the real city lights are bright neutral/warm pixels.
+      // Cities are red-rich; land/ocean are blue-dominant and dark. Use the red
+      // channel to keep ONLY the real city-light data and make the rest black.
+      float light = smoothstep(0.08, 0.30, nightColor.r);
+      vec3 cityLights = nightColor.rgb * light * 1.9;
+      // Faint dim earth so the dark side is still visible, not pure black.
+      // Keep a good amount of the day map's color (not full grayscale).
+      vec3 tint = mix(vec3(dayLum), dayColor.rgb, 0.6);
+      vec3 duskEarth = tint * 0.22;
+      vec3 nightCol = duskEarth + cityLights;
+
+      float blend = smoothstep(-0.1, 0.1, intensity);
+      gl_FragColor = vec4(mix(nightCol, dayColor.rgb, blend), 1.0);
     }
   `;
 
-  // City lights: sample the night texture by analytic lat/lng, add on the
-  // night side only. Additive blend makes the lit pixels glow.
-  const LIGHTS_FRAG = `
-    uniform vec3 sunDir;
-    uniform sampler2D nightTex;
-    varying vec3 vWorldNormal;
-    const float PI = 3.141592653589793;
-    void main() {
-      vec3 n = normalize(vWorldNormal);
-      float lat = asin(clamp(n.y, -1.0, 1.0));         // -PI/2 .. PI/2
-      float theta = atan(n.z, n.x);                    // = (90 - lng) in rad
-      float lng = (PI * 0.5) - theta;                  // radians
-      float u = fract((lng / (2.0 * PI)) + 0.5);
-      float v = (lat / PI) + 0.5;
-      vec3 lights = texture2D(nightTex, vec2(u, v)).rgb;
-      // The black-marble texture has faint dark-blue oceans; subtract a floor
-      // to drop them to zero so only genuine city lights remain, then boost.
-      lights = max(lights - 0.12, 0.0) * 2.8;
-      float d = dot(n, normalize(sunDir));
-      float night = smoothstep(0.12, -0.18, d);
-      gl_FragColor = vec4(lights * night, 1.0);
-    }
-  `;
+  const texLoader = new THREE.TextureLoader();
+  // Day side uses the same Blue Marble map as the rest of the app (the one the
+  // user liked), so toggling day/night keeps the surface looking consistent.
+  // NOTE: do NOT set texture colorSpace here. A raw ShaderMaterial writes its
+  // output straight to the canvas with no colour re-encoding, so decoding the
+  // textures to linear would make the whole globe look dark.
+  const dayTex = texLoader.load(TEX_BASE);
+  const nightTex = texLoader.load(IMG + "earth-night.jpg");
 
-  const nightTex = new THREE.TextureLoader().load(IMG + "earth-night.jpg");
-  nightTex.colorSpace = THREE.SRGBColorSpace;
+  const dayNightMaterial = new THREE.ShaderMaterial({
+    uniforms: {
+      dayTexture: { value: dayTex },
+      nightTexture: { value: nightTex },
+      sunPosition: { value: new THREE.Vector2() },
+      globeRotation: { value: new THREE.Vector2() },
+    },
+    vertexShader: DN_VERT,
+    fragmentShader: DN_FRAG,
+  });
 
-  const dnShade = new THREE.Mesh(
-    new THREE.SphereGeometry(GLOBE_R * 1.001, 64, 48),
-    new THREE.ShaderMaterial({
-      uniforms: { sunDir: sunUniform },
-      vertexShader: DN_VERT,
-      fragmentShader: SHADE_FRAG,
-      side: THREE.FrontSide,
-      transparent: true,
-      depthWrite: false,
-    })
-  );
-  const dnLights = new THREE.Mesh(
-    new THREE.SphereGeometry(GLOBE_R * 1.0015, 64, 48),
-    new THREE.ShaderMaterial({
-      uniforms: { sunDir: sunUniform, nightTex: { value: nightTex } },
-      vertexShader: DN_VERT,
-      fragmentShader: LIGHTS_FRAG,
-      side: THREE.FrontSide,
-      blending: THREE.AdditiveBlending,
-      transparent: true,
-      depthWrite: false,
-    })
-  );
+  // Sub-solar point [lng, lat] for a given instant.
+  function sunPosAt(dt) {
+    const day = new Date(+dt).setUTCHours(0, 0, 0, 0);
+    const t = solar.century(dt);
+    const lng = ((day - dt) / 864e5) * 360 - 180;
+    return [lng - solar.equationOfTime(t) / 4, solar.declination(t)];
+  }
 
-  const dayNightGroup = new THREE.Group();
-  dayNightGroup.add(dnShade);
-  dayNightGroup.add(dnLights);
+  let dayNightRaf = null;
+  function dayNightTick() {
+    const u = dayNightMaterial.uniforms;
+    u.sunPosition.value.set(...sunPosAt(Date.now()));
+    const pov = globe.pointOfView();
+    u.globeRotation.value.set(pov.lng, pov.lat);
+    dayNightRaf = requestAnimationFrame(dayNightTick);
+  }
 
   function applyDayNight() {
-    const scene = globe.scene();
     if (dayNightEl.checked) {
-      sunUniform.value = sunDirection(); // refresh the terminator on enable
-      if (!dayNightGroup.parent) scene.add(dayNightGroup);
-    } else if (dayNightGroup.parent) {
-      scene.remove(dayNightGroup);
+      // Day/night owns the globe surface material; the HD tile engine would
+      // paint over it, so enabling day/night turns off HD.
+      if (hdMapEl.checked) {
+        hdMapEl.checked = false;
+        globe.globeTileEngineUrl(null);
+      }
+      globe.globeMaterial(dayNightMaterial);
+      if (dayNightRaf === null) dayNightTick();
+    } else {
+      if (dayNightRaf !== null) {
+        cancelAnimationFrame(dayNightRaf);
+        dayNightRaf = null;
+      }
+      globe.globeMaterial(baseMaterial);
+      applyHdMap(); // restore the correct base/tile surface state
     }
   }
   dayNightEl.addEventListener("change", applyDayNight);
