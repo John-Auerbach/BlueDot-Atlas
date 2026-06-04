@@ -21,6 +21,7 @@ import * as solar from "https://esm.sh/solar-calculator@0.3";
   const hdMapEl = document.getElementById("hd-map");
   const atmosphereEl = document.getElementById("atmosphere");
   const dayNightEl = document.getElementById("daynight");
+  const cloudsEl = document.getElementById("clouds");
   const goBtn = document.getElementById("go");
   const results = document.getElementById("results");
   const closeBtn = document.getElementById("close");
@@ -209,7 +210,7 @@ import * as solar from "https://esm.sh/solar-calculator@0.3";
   // Front shell: a very faint, even white haze laid over the whole visible
   // hemisphere that lifts softly toward the limb — the diffuse glow on the
   // planet itself. fade 0 keeps the haze all the way to the edge.
-  const atmoInner = makeShell(1.015, THREE.FrontSide, {
+  const atmoInner = makeShell(1.02, THREE.FrontSide, {
     base: 0.05, power: 2.0, fade: 0.5, intensity: 1.1,
   });
 
@@ -320,9 +321,11 @@ import * as solar from "https://esm.sh/solar-calculator@0.3";
       float nightDepth = smoothstep(0.0, -0.25, intensity);
       cityLights *= nightDepth;
       // Faint dim earth so the dark side is still visible, not pure black.
-      // Keep a good amount of the day map's color (not full grayscale).
+      // Keep a good amount of the day map's color (not full grayscale). A small
+      // gamma >1 adds contrast (darkens the mid/low tones) before scaling down,
+      // so the night ground is a touch darker without touching city lights.
       vec3 tint = mix(vec3(dayLum), dayColor.rgb, 0.6);
-      vec3 duskEarth = tint * 0.22;
+      vec3 duskEarth = pow(tint, vec3(1.5)) * 0.22;
       vec3 nightCol = duskEarth + cityLights;
 
       float blend = smoothstep(-0.1, 0.1, intensity);
@@ -390,6 +393,119 @@ import * as solar from "https://esm.sh/solar-calculator@0.3";
   }
   dayNightEl.addEventListener("change", applyDayNight);
   applyDayNight();
+
+  // --- Realism: clouds ----------------------------------------------------
+  // A translucent sphere just above the surface wrapped in a live cloud map
+  // (white clouds on transparent). It sits in the same world frame as the
+  // globe surface, so it stays locked to the Earth (the auto-rotate orbits the
+  // camera, not the surface). The texture's brightness drives its own alpha,
+  // so the clear sky is see-through and only the clouds show.
+  const CLOUDS_IMG = "https://clouds.matteason.co.uk/images/4096x2048/clouds.jpg";
+  const CLOUDS_FALLBACK = "https://unpkg.com/three-globe@2.31.0/example/img/clouds/clouds.png";
+  let cloudMesh = null;
+  let cloudRaf = null;
+
+  const CLOUD_VERT = `
+    varying vec3 vNormal;
+    varying vec2 vUv;
+    void main() {
+      vNormal = normalize(normalMatrix * normal);
+      vUv = uv;
+      gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+    }
+  `;
+  const CLOUD_FRAG = `
+    #define PI 3.141592653589793
+    uniform sampler2D cloudTexture;
+    uniform float opacity;
+    uniform vec2 sunPosition;
+    uniform vec2 globeRotation;
+    uniform float sunFade;
+    varying vec3 vNormal;
+    varying vec2 vUv;
+
+    float toRad(in float a) { return a * PI / 180.0; }
+    vec3 Polar2Cartesian(in vec2 c) {
+      float theta = toRad(90.0 - c.x);
+      float phi = toRad(90.0 - c.y);
+      return vec3(sin(phi) * cos(theta), cos(phi), sin(phi) * sin(theta));
+    }
+
+    void main() {
+      vec4 tex = texture2D(cloudTexture, vUv);
+      float a = tex.r * opacity; // white clouds -> opaque, black sky -> clear
+
+      // Sun-aware shading: dim the clouds on the night side (only when
+      // day/night is on, via sunFade).
+      float invLon = toRad(globeRotation.x);
+      float invLat = -toRad(globeRotation.y);
+      mat3 rotX = mat3(1.0, 0.0, 0.0, 0.0, cos(invLat), -sin(invLat), 0.0, sin(invLat), cos(invLat));
+      mat3 rotY = mat3(cos(invLon), 0.0, sin(invLon), 0.0, 1.0, 0.0, -sin(invLon), 0.0, cos(invLon));
+      vec3 sunDir = normalize(rotX * rotY * Polar2Cartesian(sunPosition));
+      float sun = dot(normalize(vNormal), sunDir);
+      // 0.08 floor so night clouds are dark but faintly visible.
+      float lit = mix(0.08, 1.0, smoothstep(-0.2, 0.25, sun));
+      float shade = mix(1.0, lit, sunFade);
+
+      gl_FragColor = vec4(vec3(shade), a);
+    }
+  `;
+
+  function buildClouds() {
+    if (cloudMesh) return;
+    const geom = new THREE.SphereGeometry(GLOBE_R * 1.012, 64, 48);
+    const mat = new THREE.ShaderMaterial({
+      uniforms: {
+        cloudTexture: { value: null },
+        opacity: { value: 0.85 },
+        sunPosition: { value: new THREE.Vector2() },
+        globeRotation: { value: new THREE.Vector2() },
+        sunFade: { value: 0.0 },
+      },
+      vertexShader: CLOUD_VERT,
+      fragmentShader: CLOUD_FRAG,
+      transparent: true,
+      depthWrite: false,
+    });
+    const loader = new THREE.TextureLoader();
+    loader.setCrossOrigin("anonymous");
+    const apply = (tex) => {
+      mat.uniforms.cloudTexture.value = tex;
+      mat.needsUpdate = true;
+    };
+    loader.load(CLOUDS_IMG, apply, undefined, () =>
+      loader.load(CLOUDS_FALLBACK, apply)
+    );
+    cloudMesh = new THREE.Mesh(geom, mat);
+  }
+
+  function cloudTick() {
+    if (cloudMesh) {
+      const u = cloudMesh.material.uniforms;
+      u.sunPosition.value.set(...sunPosAt(Date.now()));
+      const pov = globe.pointOfView();
+      u.globeRotation.value.set(pov.lng, pov.lat);
+      u.sunFade.value = dayNightEl.checked ? 1.0 : 0.0;
+    }
+    cloudRaf = requestAnimationFrame(cloudTick);
+  }
+
+  function applyClouds() {
+    const scene = globe.scene();
+    if (cloudsEl.checked) {
+      buildClouds();
+      if (!cloudMesh.parent) scene.add(cloudMesh);
+      if (cloudRaf === null) cloudTick();
+    } else if (cloudMesh && cloudMesh.parent) {
+      scene.remove(cloudMesh);
+      if (cloudRaf !== null) {
+        cancelAnimationFrame(cloudRaf);
+        cloudRaf = null;
+      }
+    }
+  }
+  cloudsEl.addEventListener("change", applyClouds);
+  applyClouds();
 
 
   function resize() {
