@@ -597,7 +597,12 @@ import * as solar from "https://esm.sh/solar-calculator@0.3";
       float snake = 0.06 * sin(lon * 2.0 + time * 0.22)
                   + 0.038 * sin(lon * 3.0 - time * 0.16)
                   + 0.02 * sin(lon * 5.0 + time * 0.32);
-      float sigma = toRad(1.6);                    // half-width of the band
+      // WIDTH varies along the ribbon and over time, so some stretches bulge
+      // out wider while others pinch in narrow.
+      float wN = noise(vec2(lon * 0.9 + 30.0, time * 0.04));
+      wN += 0.5 * noise(vec2(lon * 2.3 - 6.0, time * 0.07));
+      wN /= 1.5;
+      float sigma = toRad(mix(1.2, 3.2, smoothstep(0.25, 0.8, wN)));  // half-width
 
       // PRIMARY oval.
       float cN = toRad(23.0) + snake;
@@ -631,6 +636,14 @@ import * as solar from "https://esm.sh/solar-calculator@0.3";
       n /= 1.5;
       float streak = mix(0.6, 1.0, smoothstep(0.2, 0.9, n));
 
+      // TRANSIENT STREAKS — narrow bright rays that flare up and fade out at
+      // random spots along the ribbon. A high-frequency longitude pattern is
+      // gated by a fast-moving time window so individual rays pop in and out.
+      float ray = noise(vec2(lon * 28.0 + 3.0, up * 1.5));
+      float rayLife = noise(vec2(lon * 4.0 - 12.0, time * 0.6));   // fast flicker
+      float rays = smoothstep(0.62, 0.95, ray) * smoothstep(0.5, 0.9, rayLife);
+      streak += rays * 0.9;
+
       // BREAKS — a slow large-scale mask along longitude that can pull the
       // ribbon apart into separate arcs and then heal it back together, so the
       // ring isn't always closed. Gaps open and migrate over time.
@@ -641,7 +654,7 @@ import * as solar from "https://esm.sh/solar-calculator@0.3";
       streak *= gap;
 
       // Brightest near the surface, fading up the curtain.
-      float vfade = smoothstep(0.0, 0.05, up) * smoothstep(1.0, 0.2, up);
+      float vfade = smoothstep(0.0, 0.05, up) * smoothstep(1.0, 0.25, up);
       return band * streak * vfade;
     }
 
@@ -662,6 +675,7 @@ import * as solar from "https://esm.sh/solar-calculator@0.3";
 
       vec3 green = vec3(0.15, 1.0, 0.5);
       vec3 magenta = vec3(0.75, 0.2, 1.0);
+      vec3 red = vec3(1.0, 0.15, 0.25);
 
       float dt = (tEnd - tStart) / float(STEPS);
       vec3 acc = vec3(0.0);
@@ -672,6 +686,24 @@ import * as solar from "https://esm.sh/solar-calculator@0.3";
         float dens = density(p, up);
         if (dens <= 0.0) continue;
         vec3 col = mix(green, magenta, smoothstep(0.25, 1.0, up));
+
+        // High-altitude red oxygen glow during especially intense activity.
+        // "act" is a slow, patchy storm-intensity field around the pole; where
+        // it's high AND we're in the upper part of the curtain, the colour
+        // shifts toward red — the classic SAR / strong-storm red tops.
+        vec3 dir = normalize(p);
+        float lon = atan(dir.z, dir.x);
+        float act = noise(vec2(lon * 0.7 - 3.0, time * 0.03));
+        act += 0.5 * noise(vec2(lon * 1.5 + 9.0, time * 0.05));
+        act /= 1.5;
+        float storm = smoothstep(0.45, 0.7, act);    // patchy intense regions
+        // Red builds through the upper half of the curtain; gate opens low
+        // enough that the still-dense part of the curtain reddens.
+        float redMix = storm * smoothstep(0.3, 0.7, up);
+        col = mix(col, red, redMix);
+        // Intense red patches also glow a bit brighter (oxygen line).
+        dens *= 1.0 + 0.8 * redMix;
+
         acc += col * dens;
       }
       acc *= dt * 0.065;   // integrate; scale to taste
