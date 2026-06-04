@@ -22,6 +22,7 @@ import * as solar from "https://esm.sh/solar-calculator@0.3";
   const atmosphereEl = document.getElementById("atmosphere");
   const dayNightEl = document.getElementById("daynight");
   const cloudsEl = document.getElementById("clouds");
+  const aurorasEl = document.getElementById("auroras");
   const goBtn = document.getElementById("go");
   const results = document.getElementById("results");
   const closeBtn = document.getElementById("close");
@@ -512,6 +513,209 @@ import * as solar from "https://esm.sh/solar-calculator@0.3";
   }
   cloudsEl.addEventListener("change", applyClouds);
   applyClouds();
+
+  // --- Realism: auroras ---------------------------------------------------
+  // Glowing curtains of light standing UP from the auroral ovals near each
+  // pole. Each oval is a cone-frustum "wall" rising radially off the surface
+  // (built from an open cylinder whose ends follow radial lines from the
+  // globe centre). The shader paints vertical green->magenta streaks that
+  // drift and shimmer with time, brightest near the surface and fading as the
+  // curtain rises, and only visible on the night side.
+  // The aurora is a genuine 3D VOLUME, not a sheet. A bounding sphere is drawn
+  // and the fragment shader RAYMARCHES through the auroral shell, sampling an
+  // emissive density field that has real extent in all three directions:
+  //  - radially (altitude, ~the height of the curtains),
+  //  - across-track (a band of finite width in colatitude), and
+  //  - along-track (drifting vertical streaks in longitude).
+  // Because we integrate emission along the view ray through that field, the
+  // aurora has actual depth from EVERY angle — head-on you look through the
+  // full thickness of the band, edge-on you see the curtains stand up. There
+  // are no flat planes anywhere.
+  const AURORA_VERT = `
+    varying vec3 vWorldPos;
+    void main() {
+      vec4 wp = modelMatrix * vec4(position, 1.0);
+      vWorldPos = wp.xyz;
+      gl_Position = projectionMatrix * viewMatrix * wp;
+    }
+  `;
+  const AURORA_FRAG = `
+    #define PI 3.141592653589793
+    #define GLOBE_R 100.0
+    #define A_BASE 1.0      // inner radius of the shell = GLOBE_R + A_BASE
+    #define A_HEIGHT 22.0   // radial thickness of the shell (curtain height)
+    #define STEPS 48
+    uniform float time;
+    uniform vec2 sunPosition;
+    uniform vec2 globeRotation;
+    uniform float sunFade;
+    varying vec3 vWorldPos;
+
+    float toRad(in float a) { return a * PI / 180.0; }
+    vec3 Polar2Cartesian(in vec2 c) {
+      float theta = toRad(90.0 - c.x);
+      float phi = toRad(90.0 - c.y);
+      return vec3(sin(phi) * cos(theta), cos(phi), sin(phi) * sin(theta));
+    }
+    float hash(float n) { return fract(sin(n) * 43758.5453123); }
+    float noise(in vec2 p) {
+      vec2 i = floor(p); vec2 f = fract(p);
+      f = f * f * (3.0 - 2.0 * f);
+      float a = hash(i.x + i.y * 57.0);
+      float b = hash(i.x + 1.0 + i.y * 57.0);
+      float c = hash(i.x + (i.y + 1.0) * 57.0);
+      float d = hash(i.x + 1.0 + (i.y + 1.0) * 57.0);
+      return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
+    }
+
+    // Ray vs sphere centred at the origin. Returns the two hit distances
+    // (near, far) along rd, or vec2(-1.0) when the ray misses.
+    vec2 raySphere(vec3 ro, vec3 rd, float rad) {
+      float b = dot(ro, rd);
+      float c = dot(ro, ro) - rad * rad;
+      float h = b * b - c;
+      if (h < 0.0) return vec2(-1.0);
+      h = sqrt(h);
+      return vec2(-b - h, -b + h);
+    }
+
+    // Emissive density of the auroral medium at a point p (globe space).
+    // Non-zero only inside a band of finite width around each polar oval, and
+    // only between the inner and outer shell radii. This finite across-track
+    // width is what gives the aurora real thickness when viewed head-on.
+    float density(vec3 p, out float up) {
+      float r = length(p);
+      up = (r - (GLOBE_R + A_BASE)) / A_HEIGHT;   // 0 at base, 1 at top
+      if (up < 0.0 || up > 1.0) return 0.0;
+      vec3 d = p / r;
+      float colat = acos(clamp(d.y, -1.0, 1.0));   // 0 at N pole, PI at S
+      float lon = atan(d.z, d.x);
+
+      // Strong, low-frequency meander of the oval centre so the whole ribbon
+      // SNAKES around the pole instead of sitting on a fixed circle. Amplitude
+      // is comparable to the band width, so the band visibly waves in and out.
+      float snake = 0.10 * sin(lon * 2.0 + time * 0.35)
+                  + 0.06 * sin(lon * 3.0 - time * 0.25)
+                  + 0.03 * sin(lon * 5.0 + time * 0.5);
+      float cN = toRad(23.0) + snake;
+      float cS = toRad(157.0) + snake;
+      float sigma = toRad(3.2);                    // half-width of the band
+      float band = exp(-pow((colat - cN) / sigma, 2.0))
+                 + exp(-pow((colat - cS) / sigma, 2.0));
+      if (band < 0.01) return 0.0;
+
+      // Soft brightness variation ALONG the ribbon (longitude) — broad, low
+      // contrast swells rather than hard blades, so it no longer looks sliced.
+      // The flow follows the ribbon as it snakes (lon offset by the meander).
+      float flow = lon * 6.0 + snake * 8.0;
+      float n = noise(vec2(flow, time * 0.2 + up * 0.4));
+      n += 0.5 * noise(vec2(flow * 2.1 + 11.0, time * 0.33));
+      n /= 1.5;
+      float streak = mix(0.35, 1.0, smoothstep(0.2, 0.9, n));
+
+      // Brightest near the surface, fading up the curtain.
+      float vfade = smoothstep(0.0, 0.05, up) * smoothstep(1.0, 0.2, up);
+      return band * streak * vfade;
+    }
+
+    void main() {
+      vec3 ro = cameraPosition;             // ray origin (globe space ~ world)
+      vec3 rd = normalize(vWorldPos - ro);  // view ray direction
+
+      // Entry/exit of the outer bounding shell.
+      vec2 outer = raySphere(ro, rd, GLOBE_R + A_BASE + A_HEIGHT);
+      if (outer.y < 0.0) discard;
+      float tStart = max(outer.x, 0.0);
+      float tEnd = outer.y;
+      // Stop the march at the near surface of the solid Earth so the far-side
+      // oval is correctly hidden behind the globe.
+      vec2 solid = raySphere(ro, rd, GLOBE_R + A_BASE);
+      if (solid.x > 0.0) tEnd = min(tEnd, solid.x);
+      if (tEnd <= tStart) discard;
+
+      vec3 green = vec3(0.15, 1.0, 0.5);
+      vec3 magenta = vec3(0.75, 0.2, 1.0);
+
+      float dt = (tEnd - tStart) / float(STEPS);
+      vec3 acc = vec3(0.0);
+      for (int i = 0; i < STEPS; i++) {
+        float t = tStart + (float(i) + 0.5) * dt;
+        vec3 p = ro + rd * t;
+        float up;
+        float dens = density(p, up);
+        if (dens <= 0.0) continue;
+        vec3 col = mix(green, magenta, smoothstep(0.25, 1.0, up));
+        acc += col * dens;
+      }
+      acc *= dt * 0.08;   // integrate; scale to taste
+      float lum = max(acc.r, max(acc.g, acc.b));
+      if (lum <= 0.001) discard;
+      gl_FragColor = vec4(acc, lum);
+    }
+  `;
+
+  let auroraGroup = null;
+  let auroraRaf = null;
+  const auroraMats = [];
+
+  // Build the aurora volume: a single bounding sphere just larger than the
+  // auroral shell. The raymarching fragment shader does all the work, so this
+  // is the only mesh needed — the depth comes from integrating through the
+  // density field, not from stacking geometry.
+  function buildAuroras() {
+    if (auroraGroup) return;
+    auroraGroup = new THREE.Group();
+    const R = GLOBE_R + 1.0 + 22.0 + 0.5;   // matches A_BASE + A_HEIGHT in frag
+    const geom = new THREE.SphereGeometry(R, 64, 48);
+    const mat = new THREE.ShaderMaterial({
+      uniforms: {
+        time: { value: 0 },
+        sunPosition: { value: new THREE.Vector2() },
+        globeRotation: { value: new THREE.Vector2() },
+        sunFade: { value: 0.0 },
+      },
+      vertexShader: AURORA_VERT,
+      fragmentShader: AURORA_FRAG,
+      side: THREE.FrontSide,
+      blending: THREE.AdditiveBlending,
+      transparent: true,
+      depthWrite: false,
+    });
+    auroraMats.push(mat);
+    auroraGroup.add(new THREE.Mesh(geom, mat));
+  }
+
+  function auroraTick() {
+    const t = performance.now() / 1000;
+    const sun = sunPosAt(Date.now());
+    const pov = globe.pointOfView();
+    const sunFade = dayNightEl.checked ? 1.0 : 0.0;
+    for (const mat of auroraMats) {
+      const u = mat.uniforms;
+      u.time.value = t;
+      u.sunPosition.value.set(sun[0], sun[1]);
+      u.globeRotation.value.set(pov.lng, pov.lat);
+      u.sunFade.value = sunFade;
+    }
+    auroraRaf = requestAnimationFrame(auroraTick);
+  }
+
+  function applyAuroras() {
+    const scene = globe.scene();
+    if (aurorasEl.checked) {
+      buildAuroras();
+      if (!auroraGroup.parent) scene.add(auroraGroup);
+      if (auroraRaf === null) auroraTick();
+    } else if (auroraGroup && auroraGroup.parent) {
+      scene.remove(auroraGroup);
+      if (auroraRaf !== null) {
+        cancelAnimationFrame(auroraRaf);
+        auroraRaf = null;
+      }
+    }
+  }
+  aurorasEl.addEventListener("change", applyAuroras);
+  applyAuroras();
 
 
   function resize() {
